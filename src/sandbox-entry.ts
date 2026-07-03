@@ -26,7 +26,9 @@
  * KV marker. Verified events are recorded in the `payments` storage
  * collection, optionally mirrored as CMS order entries, and optionally
  * forwarded to a host URL as an HMAC-signed POST so host apps can fulfill
- * orders, send email, etc.
+ * orders, send email, etc. Forwarding is at-least-once: a delivery is only
+ * acknowledged to Stripe after the host endpoint accepts the forward, so a
+ * failing host is covered by Stripe's own webhook retries.
  *
  * The plugin must run in-process (`plugins:`, not `sandboxed:`): stripe-node
  * relies on the host Worker's global fetch/SubtleCrypto, which are not
@@ -496,9 +498,14 @@ async function maybeCreateOrder(
   }
 }
 
-/** Forward a verified event to the host URL as an HMAC-signed POST. Best-effort. */
-async function forwardEvent(ctx: PluginContext, cfg: Settings, event: Stripe.Event): Promise<void> {
-  if (!cfg.forwardUrl || !cfg.forwardSecret) return;
+/**
+ * Forward a verified event to the host URL as an HMAC-signed POST. Returns
+ * true when delivered (2xx) or when forwarding is disabled, false on any
+ * failure — the caller then refuses the Stripe delivery so the event is
+ * retried rather than lost (hosts fulfill orders from these forwards).
+ */
+async function forwardEvent(ctx: PluginContext, cfg: Settings, event: Stripe.Event): Promise<boolean> {
+  if (!cfg.forwardUrl || !cfg.forwardSecret) return true;
   try {
     const body = JSON.stringify(event);
     const t = Math.floor(Date.now() / 1000);
@@ -511,9 +518,14 @@ async function forwardEvent(ctx: PluginContext, cfg: Settings, event: Stripe.Eve
       },
       body,
     });
-    if (!res.ok) ctx.log.warn(`Event forward returned HTTP ${res.status}`, { eventId: event.id });
+    if (!res.ok) {
+      ctx.log.warn(`Event forward returned HTTP ${res.status}`, { eventId: event.id });
+      return false;
+    }
+    return true;
   } catch (err) {
     ctx.log.error("Event forward failed", err as Error);
+    return false;
   }
 }
 
@@ -691,8 +703,11 @@ async function handleWebhook(routeCtx: SandboxedRouteContext, ctx: PluginContext
   }
 
   await processEvent(ctx, cfg, event);
+  // The dedup marker is set only after a successful forward: on forward
+  // failure the delivery is not acknowledged, so Stripe retries and the
+  // retry re-processes (idempotent upserts) and re-forwards the event.
+  if (!(await forwardEvent(ctx, cfg, event))) throw new Error("event_forward_failed");
   await ctx.kv.set(dedupKey, { type: event.type, at: new Date().toISOString() });
-  await forwardEvent(ctx, cfg, event);
   return { received: true, type: event.type };
 }
 

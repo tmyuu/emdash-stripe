@@ -174,7 +174,11 @@ export const POST: APIRoute = async ({ request }) => {
 };
 ```
 
-Forwarding is at-least-once; make your handler idempotent (key on `event.id`).
+Forwarding is at-least-once, backed by Stripe's webhook retries: the plugin
+acknowledges a delivery only after your endpoint responds 2xx, so a non-2xx
+response or an unreachable endpoint means Stripe redelivers the event later
+and the plugin re-forwards it. Make your handler idempotent (key on
+`event.id`) and return non-2xx when your fulfillment fails.
 
 ## Subscriptions
 

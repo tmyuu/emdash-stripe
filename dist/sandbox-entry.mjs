@@ -939,9 +939,14 @@ async function maybeCreateOrder(ctx, cfg, recordId, record) {
 		ctx.log.error(`Failed to create an order entry in "${cfg.ordersCollection}" — does the collection exist with the documented fields?`, err);
 	}
 }
-/** Forward a verified event to the host URL as an HMAC-signed POST. Best-effort. */
+/**
+* Forward a verified event to the host URL as an HMAC-signed POST. Returns
+* true when delivered (2xx) or when forwarding is disabled, false on any
+* failure — the caller then refuses the Stripe delivery so the event is
+* retried rather than lost (hosts fulfill orders from these forwards).
+*/
 async function forwardEvent(ctx, cfg, event) {
-	if (!cfg.forwardUrl || !cfg.forwardSecret) return;
+	if (!cfg.forwardUrl || !cfg.forwardSecret) return true;
 	try {
 		const body = JSON.stringify(event);
 		const t = Math.floor(Date.now() / 1e3);
@@ -954,9 +959,14 @@ async function forwardEvent(ctx, cfg, event) {
 			},
 			body
 		});
-		if (!res.ok) ctx.log.warn(`Event forward returned HTTP ${res.status}`, { eventId: event.id });
+		if (!res.ok) {
+			ctx.log.warn(`Event forward returned HTTP ${res.status}`, { eventId: event.id });
+			return false;
+		}
+		return true;
 	} catch (err) {
 		ctx.log.error("Event forward failed", err);
+		return false;
 	}
 }
 async function processEvent(ctx, cfg, event) {
@@ -1105,11 +1115,11 @@ async function handleWebhook(routeCtx, ctx) {
 		throw new Error("event_verification_failed");
 	}
 	await processEvent(ctx, cfg, event);
+	if (!await forwardEvent(ctx, cfg, event)) throw new Error("event_forward_failed");
 	await ctx.kv.set(dedupKey, {
 		type: event.type,
 		at: (/* @__PURE__ */ new Date()).toISOString()
 	});
-	await forwardEvent(ctx, cfg, event);
 	return {
 		received: true,
 		type: event.type
