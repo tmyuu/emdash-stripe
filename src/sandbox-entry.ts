@@ -111,6 +111,16 @@ function withSessionParam(url: string): string {
   return `${url}${url.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`;
 }
 
+/**
+ * URL base for absolute URLs (Stripe rejects relative ones). The configured
+ * site URL wins when present; EmDash 0.27 leaves route contexts without site
+ * info (emdash-cms/emdash#1813), in which case the origin comes from the
+ * originating request.
+ */
+function urlBase(ctx: PluginContext, routeCtx: SandboxedRouteContext): string {
+  return ctx.site.url || new URL(routeCtx.request.url).origin;
+}
+
 /** Client-supplied metadata: string→string, capped, reserved keys stripped. */
 function sanitizeMetadata(v: unknown): Record<string, string> {
   const out: Record<string, string> = {};
@@ -195,7 +205,7 @@ function renderRecurringName(
     .slice(0, 250);
 }
 
-function resolveImage(ctx: PluginContext, v: unknown): string | undefined {
+function resolveImage(origin: string, v: unknown): string | undefined {
   let url: string | undefined;
   if (typeof v === "string") url = v.trim();
   else if (v && typeof v === "object") {
@@ -204,7 +214,7 @@ function resolveImage(ctx: PluginContext, v: unknown): string | undefined {
   }
   if (!url) return undefined;
   if (/^https?:\/\//.test(url)) return url;
-  if (url.startsWith("/") && !url.startsWith("//")) return ctx.url(url);
+  if (url.startsWith("/") && !url.startsWith("//")) return `${origin}${url}`;
   return undefined;
 }
 
@@ -212,6 +222,7 @@ async function resolveItems(
   ctx: PluginContext,
   stripe: Stripe,
   cfg: Settings,
+  origin: string,
   input: unknown,
 ): Promise<ResolveResult> {
   if (!Array.isArray(input) || input.length === 0 || input.length > 100) {
@@ -317,7 +328,7 @@ async function resolveItems(
       recurring: false,
       unitAmount,
       description: mapping.descriptionField ? str(data[mapping.descriptionField]) : undefined,
-      image: mapping.imageField ? resolveImage(ctx, data[mapping.imageField]) : undefined,
+      image: mapping.imageField ? resolveImage(origin, data[mapping.imageField]) : undefined,
     });
   }
 
@@ -351,8 +362,9 @@ async function handleCheckout(routeCtx: SandboxedRouteContext, ctx: PluginContex
   const trustedResult = await resolveTrusted(cfg, body);
   if ("error" in trustedResult) return trustedResult;
   const trusted = trustedResult.trusted;
+  const base = urlBase(ctx, routeCtx);
 
-  const resolved = await resolveItems(ctx, stripe, cfg, body.items);
+  const resolved = await resolveItems(ctx, stripe, cfg, base, body.items);
   if ("error" in resolved) return resolved;
   const items = resolved.items;
 
@@ -429,15 +441,15 @@ async function handleCheckout(routeCtx: SandboxedRouteContext, ctx: PluginContex
     }
   }
 
-  // Stripe requires absolute URLs; ctx.url() resolves against the site origin.
+  // Stripe requires absolute URLs (see urlBase for base resolution).
   const embedded = body.uiMode === "embedded" || body.uiMode === "embedded_page";
   if (embedded) {
     params.ui_mode = "embedded_page";
     const returnPath = relPath(body.returnPath) ?? relPath(body.successPath) ?? cfg.successPath;
-    params.return_url = withSessionParam(ctx.url(returnPath));
+    params.return_url = withSessionParam(`${base}${returnPath}`);
   } else {
-    params.success_url = withSessionParam(ctx.url(relPath(body.successPath) ?? cfg.successPath));
-    params.cancel_url = ctx.url(relPath(body.cancelPath) ?? cfg.cancelPath);
+    params.success_url = withSessionParam(`${base}${relPath(body.successPath) ?? cfg.successPath}`);
+    params.cancel_url = `${base}${relPath(body.cancelPath) ?? cfg.cancelPath}`;
   }
 
   try {
@@ -463,7 +475,7 @@ async function handlePaymentIntent(routeCtx: SandboxedRouteContext, ctx: PluginC
   if ("error" in trustedResult) return trustedResult;
   const trusted = trustedResult.trusted;
 
-  const resolved = await resolveItems(ctx, stripe, cfg, body.items);
+  const resolved = await resolveItems(ctx, stripe, cfg, urlBase(ctx, routeCtx), body.items);
   if ("error" in resolved) return resolved;
   const items = resolved.items;
 

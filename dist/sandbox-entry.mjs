@@ -704,6 +704,15 @@ function relPath(v) {
 function withSessionParam(url) {
 	return `${url}${url.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`;
 }
+/**
+* URL base for absolute URLs (Stripe rejects relative ones). The configured
+* site URL wins when present; EmDash 0.27 leaves route contexts without site
+* info (emdash-cms/emdash#1813), in which case the origin comes from the
+* originating request.
+*/
+function urlBase(ctx, routeCtx) {
+	return ctx.site.url || new URL(routeCtx.request.url).origin;
+}
 /** Client-supplied metadata: string→string, capped, reserved keys stripped. */
 function sanitizeMetadata(v) {
 	const out = {};
@@ -741,7 +750,7 @@ function renderRecurringName(template, name, count, interval) {
 	if (!template) return name;
 	return template.replaceAll("{name}", name).replaceAll("{count}", String(count)).replaceAll("{interval}", interval).slice(0, 250);
 }
-function resolveImage(ctx, v) {
+function resolveImage(origin, v) {
 	let url;
 	if (typeof v === "string") url = v.trim();
 	else if (v && typeof v === "object") {
@@ -750,9 +759,9 @@ function resolveImage(ctx, v) {
 	}
 	if (!url) return void 0;
 	if (/^https?:\/\//.test(url)) return url;
-	if (url.startsWith("/") && !url.startsWith("//")) return ctx.url(url);
+	if (url.startsWith("/") && !url.startsWith("//")) return `${origin}${url}`;
 }
-async function resolveItems(ctx, stripe, cfg, input) {
+async function resolveItems(ctx, stripe, cfg, origin, input) {
 	if (!Array.isArray(input) || input.length === 0 || input.length > 100) return fail("invalid_items");
 	const items = [];
 	for (const raw of input) {
@@ -824,7 +833,7 @@ async function resolveItems(ctx, stripe, cfg, input) {
 			recurring: false,
 			unitAmount,
 			description: mapping.descriptionField ? str(data[mapping.descriptionField]) : void 0,
-			image: mapping.imageField ? resolveImage(ctx, data[mapping.imageField]) : void 0
+			image: mapping.imageField ? resolveImage(origin, data[mapping.imageField]) : void 0
 		});
 	}
 	const currencies = new Set(items.map((i) => i.currency));
@@ -858,7 +867,8 @@ async function handleCheckout(routeCtx, ctx) {
 	const trustedResult = await resolveTrusted(cfg, body);
 	if ("error" in trustedResult) return trustedResult;
 	const trusted = trustedResult.trusted;
-	const resolved = await resolveItems(ctx, stripe, cfg, body.items);
+	const base = urlBase(ctx, routeCtx);
+	const resolved = await resolveItems(ctx, stripe, cfg, base, body.items);
 	if ("error" in resolved) return resolved;
 	const items = resolved.items;
 	const anyRecurring = items.some((i) => i.recurring);
@@ -925,11 +935,10 @@ async function handleCheckout(routeCtx, ctx) {
 	const embedded = body.uiMode === "embedded" || body.uiMode === "embedded_page";
 	if (embedded) {
 		params.ui_mode = "embedded_page";
-		const returnPath = relPath(body.returnPath) ?? relPath(body.successPath) ?? cfg.successPath;
-		params.return_url = withSessionParam(ctx.url(returnPath));
+		params.return_url = withSessionParam(`${base}${relPath(body.returnPath) ?? relPath(body.successPath) ?? cfg.successPath}`);
 	} else {
-		params.success_url = withSessionParam(ctx.url(relPath(body.successPath) ?? cfg.successPath));
-		params.cancel_url = ctx.url(relPath(body.cancelPath) ?? cfg.cancelPath);
+		params.success_url = withSessionParam(`${base}${relPath(body.successPath) ?? cfg.successPath}`);
+		params.cancel_url = `${base}${relPath(body.cancelPath) ?? cfg.cancelPath}`;
 	}
 	try {
 		const session = await stripe.checkout.sessions.create(params);
@@ -956,7 +965,7 @@ async function handlePaymentIntent(routeCtx, ctx) {
 	const trustedResult = await resolveTrusted(cfg, body);
 	if ("error" in trustedResult) return trustedResult;
 	const trusted = trustedResult.trusted;
-	const resolved = await resolveItems(ctx, stripe, cfg, body.items);
+	const resolved = await resolveItems(ctx, stripe, cfg, urlBase(ctx, routeCtx), body.items);
 	if ("error" in resolved) return resolved;
 	const items = resolved.items;
 	if (items.some((i) => i.recurring)) return fail("recurring_not_supported");
