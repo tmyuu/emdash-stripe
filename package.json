@@ -1,6 +1,6 @@
 {
   "name": "emdash-stripe",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "EmDash CMS plugin: Stripe payments for content entries. Hosted/embedded Checkout, Payment Intents, subscriptions via Stripe Prices, signature-verified webhooks, payment records, optional CMS order entries and event forwarding. CMS entries are the source of truth for what is sellable.",
   "type": "module",
   "main": "dist/index.mjs",
@@ -25,7 +25,8 @@
     "dev": "tsdown src/index.ts src/sandbox-entry.ts --format esm --dts --watch",
     "typecheck": "tsc --noEmit",
     "prepare": "tsdown src/index.ts src/sandbox-entry.ts --format esm --dts --clean",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "test": "vitest run"
   },
   "keywords": [
     "emdash",
@@ -59,7 +60,8 @@
     "@cloudflare/workers-types": "^4.20260424.1",
     "emdash": "^0.27.0",
     "tsdown": "^0.21.7",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
   },
   "publishConfig": {
     "access": "public"

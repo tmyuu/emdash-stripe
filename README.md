@@ -89,6 +89,11 @@ All routes are `POST` with a JSON body, mounted at `/_emdash/api/plugins/stripe/
 > `{ "data": <payload> }`. The payloads documented below are what you find
 > under `data`.
 
+> **Errors**: failures return `{ "ok": false, "error": "<code>", "message": "…", "detail"?: "…" }`.
+> `error` is the stable machine code; `message` is a human-readable string in
+> the configured **Language** (EN/JA) that hosts can show to shoppers as-is.
+> A `ja` Language also pins the hosted Checkout page locale to Japanese.
+
 ### `checkout` — create a Checkout Session
 
 ```jsonc
@@ -139,7 +144,29 @@ Embedded response: `{ "ok": true, "id": "cs_...", "clientSecret": "cs_..._secret
 }
 ```
 
-Response: `{ "ok": true, "id": "pi_...", "clientSecret": "pi_..._secret_...", "amount": 1099, "currency": "usd" }`. One-time prices only (subscriptions require Checkout).
+Response: `{ "ok": true, "id": "pi_...", "clientSecret": "pi_..._secret_...", "amount": 1099, "currency": "usd" }`. One-time prices only (subscriptions use `subscription` or Checkout).
+
+### `subscription` — for custom payment UIs (Payment Element)
+
+Create a `default_incomplete` Subscription and confirm its first invoice with
+Payment Element. A subscription always belongs to a customer, so the trusted
+`customer` field is **required** (see Host-signed requests):
+
+```jsonc
+{
+  "items": [{ "slug": "herbal-tea" }],   // "recurring": true is implied on this route
+  "metadata": { "delivery_date": "…" },  // optional → subscription metadata
+  "trusted": "v1.…"                      // required (customer)
+}
+```
+
+Response: `{ "ok": true, "id": "sub_...", "clientSecret": "pi_..._secret_...", "status": "incomplete" }` → pass `clientSecret` to Payment Element; the payment method is saved on the subscription (`save_default_payment_method`).
+
+Items with a numeric recurring price are materialized as reusable Stripe
+Prices keyed by a deterministic `lookup_key`
+(`emdash_<collection>_<entry>_<amount>_<interval>_<count>`), so repeat
+subscribers share one Price and a CMS price change simply mints a new one —
+existing subscriptions keep billing at their contracted amount.
 
 ### Host-signed requests (`trusted`)
 
@@ -158,7 +185,7 @@ base64url-encoded JSON. Supported payload fields:
 
 | Field | Routes | Effect |
 |---|---|---|
-| `customer` | `checkout`, `payment-intent` | Attach an existing Customer (`cus_…`) — saved cards, subscription-customer linkage |
+| `customer` | `checkout`, `payment-intent`, `subscription` | Attach an existing Customer (`cus_…`) — saved cards, subscription-customer linkage. Required on `subscription` |
 | `setupFutureUsage` | `payment-intent` | `on_session` / `off_session` (requires `customer`) |
 
 ```ts

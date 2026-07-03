@@ -112,114 +112,166 @@ function normalizeLang(v) {
 	return isLang(v) ? v : "en";
 }
 const LOCALES = {
-	en: { admin: {
-		languageOptionLabel: "English",
-		languageFieldLabel: "Language",
-		settingsTitle: "Stripe",
-		settingsIntro: "Accept Stripe payments for your content entries. Map one or more collections as sellable below; each entry needs either a numeric price field or a Stripe Price ID field. API keys can also be provided via the host environment (STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY).",
-		saveButton: "Save settings",
-		webhookInfo: "Webhook endpoint: register {url} in the Stripe Dashboard (Developers → Webhooks). Deliveries are authenticated by re-fetching each event from the Stripe API, so no signing secret is required.",
-		keyStatusLive: "Secret key: configured (live mode).",
-		keyStatusTest: "Secret key: configured (test mode).",
-		keyStatusMissing: "Secret key: not configured — payments are disabled until one is set here or via STRIPE_SECRET_KEY.",
-		secretKeyLabel: "Secret key",
-		secretKeyPlaceholder: "sk_live_... (leave blank to keep the current key)",
-		publishableKeyLabel: "Publishable key",
-		publishableKeyPlaceholder: "pk_live_... (exposed to the site via the config route)",
-		currencyLabel: "Currency",
-		currencyPlaceholder: "usd (ISO code; used when an entry has no currency field)",
-		priceUnitLabel: "Price field unit",
-		priceUnitMajorOption: "Major units (10.99 = $10.99, 1000 = ¥1000)",
-		priceUnitMinorOption: "Minor units (1099 = $10.99; passed to Stripe as-is)",
-		mappingsLabel: "Sellable collections (JSON)",
-		mappingsPlaceholder: "[{\"collection\": \"products\", \"priceField\": \"price\", \"priceIdField\": \"stripePriceId\", \"nameField\": \"name\", \"descriptionField\": \"description\", \"imageField\": \"image\", \"currencyField\": \"currency\"}]",
-		successPathLabel: "Success path",
-		successPathPlaceholder: "/checkout/success",
-		cancelPathLabel: "Cancel path",
-		cancelPathPlaceholder: "/checkout/cancel",
-		allowPromotionCodesLabel: "Allow promotion codes at checkout",
-		automaticTaxLabel: "Automatic tax (requires Stripe Tax)",
-		collectPhoneLabel: "Collect phone number at checkout",
-		consentPromotionsLabel: "Ask for marketing-email consent at checkout (for recovery emails)",
-		recoveryEnabledLabel: "Keep expired checkouts recoverable (abandoned-cart recovery URL)",
-		shippingCountriesLabel: "Shipping countries",
-		shippingCountriesPlaceholder: "Two-letter ISO codes, comma or newline separated (e.g. US, JP). Empty = do not collect a shipping address.",
-		ordersCollectionLabel: "Orders collection",
-		ordersCollectionPlaceholder: "Optional: collection slug to create an order entry in when a payment succeeds (see README for the field contract).",
-		forwardUrlLabel: "Forward events to URL",
-		forwardUrlPlaceholder: "Optional: https URL that receives verified Stripe events as signed POSTs (X-Emdash-Stripe-Signature).",
-		forwardSecretLabel: "Forwarding secret",
-		forwardSecretPlaceholder: "Shared secret used to HMAC-sign forwarded events (leave blank to keep the current value)",
-		forwardBindingLabel: "Forward via service binding",
-		forwardBindingPlaceholder: "Service binding name (e.g. SELF) — required when the forward URL is this same Worker, which cannot fetch its own hostname.",
-		toastSaved: "Settings saved.",
-		toastSaveFailed: "Failed to save settings.",
-		toastInvalidMappings: "Sellable collections must be a JSON array of {collection: ...} objects.",
-		toastInvalidForwardUrl: "Forward URL must be an http(s) URL.",
-		toastInvalidPath: "Success/cancel paths must start with “/”.",
-		paymentsTitle: "Payments",
-		paymentsIntro: "The most recent payment activity recorded from Stripe webhook events.",
-		colCreatedAt: "Date",
-		colType: "Type",
-		colStatus: "Status",
-		colAmount: "Amount",
-		colEmail: "Email",
-		colDescription: "Description"
-	} },
-	ja: { admin: {
-		languageOptionLabel: "日本語",
-		languageFieldLabel: "言語",
-		settingsTitle: "Stripe",
-		settingsIntro: "コンテンツエントリをStripeで販売できます。下の設定で販売対象コレクションをマッピングしてください。各エントリには数値の価格フィールド、またはStripe Price IDフィールドが必要です。APIキーはホスト環境変数(STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY)でも指定できます。",
-		saveButton: "設定を保存",
-		webhookInfo: "Webhookエンドポイント: {url} をStripeダッシュボード(開発者 → Webhook)に登録してください。受信イベントはStripe APIから再取得して真正性を検証するため、署名シークレットは不要です。",
-		keyStatusLive: "シークレットキー: 設定済み(本番モード)。",
-		keyStatusTest: "シークレットキー: 設定済み(テストモード)。",
-		keyStatusMissing: "シークレットキー: 未設定 — ここで設定するか STRIPE_SECRET_KEY を指定するまで決済は無効です。",
-		secretKeyLabel: "シークレットキー",
-		secretKeyPlaceholder: "sk_live_...(空欄なら現在のキーを維持)",
-		publishableKeyLabel: "公開可能キー",
-		publishableKeyPlaceholder: "pk_live_...(configルート経由でサイトに公開されます)",
-		currencyLabel: "通貨",
-		currencyPlaceholder: "jpy(ISOコード。エントリに通貨フィールドが無い場合に使用)",
-		priceUnitLabel: "価格フィールドの単位",
-		priceUnitMajorOption: "主要単位(10.99 = $10.99、1000 = ¥1000)",
-		priceUnitMinorOption: "最小単位(1099 = $10.99。そのままStripeへ渡す)",
-		mappingsLabel: "販売対象コレクション(JSON)",
-		mappingsPlaceholder: "[{\"collection\": \"products\", \"priceField\": \"price\", \"priceIdField\": \"stripePriceId\", \"nameField\": \"name\", \"descriptionField\": \"description\", \"imageField\": \"image\", \"currencyField\": \"currency\"}]",
-		successPathLabel: "決済成功パス",
-		successPathPlaceholder: "/checkout/success",
-		cancelPathLabel: "決済キャンセルパス",
-		cancelPathPlaceholder: "/checkout/cancel",
-		allowPromotionCodesLabel: "チェックアウトでプロモーションコードを許可",
-		automaticTaxLabel: "自動税計算(Stripe Taxが必要)",
-		collectPhoneLabel: "チェックアウトで電話番号を収集",
-		consentPromotionsLabel: "チェックアウトで販促メールの同意を収集(カゴ落ち回収メール用)",
-		recoveryEnabledLabel: "期限切れチェックアウトを復元可能にする(カゴ落ち復元URL)",
-		shippingCountriesLabel: "配送先の国",
-		shippingCountriesPlaceholder: "2文字のISOコードをカンマまたは改行区切りで(例: JP, US)。空欄なら配送先住所を収集しません。",
-		ordersCollectionLabel: "注文コレクション",
-		ordersCollectionPlaceholder: "任意: 決済成功時に注文エントリを作成するコレクションのスラッグ(フィールド仕様はREADME参照)。",
-		forwardUrlLabel: "イベント転送先URL",
-		forwardUrlPlaceholder: "任意: 検証済みStripeイベントを署名付きPOST(X-Emdash-Stripe-Signature)で受け取るhttps URL。",
-		forwardSecretLabel: "転送用シークレット",
-		forwardSecretPlaceholder: "転送イベントのHMAC署名に使う共有シークレット(空欄なら現在の値を維持)",
-		forwardBindingLabel: "転送に使うService Binding",
-		forwardBindingPlaceholder: "Binding名(例: SELF)。転送先URLがこのWorker自身の場合は必須(Workerは自分のホスト名へfetchできないため)。",
-		toastSaved: "設定を保存しました。",
-		toastSaveFailed: "設定の保存に失敗しました。",
-		toastInvalidMappings: "販売対象コレクションは {collection: ...} オブジェクトのJSON配列で指定してください。",
-		toastInvalidForwardUrl: "転送先URLは http(s) のURLで指定してください。",
-		toastInvalidPath: "成功/キャンセルパスは「/」で始めてください。",
-		paymentsTitle: "決済履歴",
-		paymentsIntro: "Stripe Webhookイベントから記録された直近の決済アクティビティです。",
-		colCreatedAt: "日時",
-		colType: "種別",
-		colStatus: "ステータス",
-		colAmount: "金額",
-		colEmail: "メール",
-		colDescription: "内容"
-	} }
+	en: {
+		admin: {
+			languageOptionLabel: "English",
+			languageFieldLabel: "Language",
+			settingsTitle: "Stripe",
+			settingsIntro: "Accept Stripe payments for your content entries. Map one or more collections as sellable below; each entry needs either a numeric price field or a Stripe Price ID field. API keys can also be provided via the host environment (STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY).",
+			saveButton: "Save settings",
+			webhookInfo: "Webhook endpoint: register {url} in the Stripe Dashboard (Developers → Webhooks). Deliveries are authenticated by re-fetching each event from the Stripe API, so no signing secret is required.",
+			keyStatusLive: "Secret key: configured (live mode).",
+			keyStatusTest: "Secret key: configured (test mode).",
+			keyStatusMissing: "Secret key: not configured — payments are disabled until one is set here or via STRIPE_SECRET_KEY.",
+			secretKeyLabel: "Secret key",
+			secretKeyPlaceholder: "sk_live_... (leave blank to keep the current key)",
+			publishableKeyLabel: "Publishable key",
+			publishableKeyPlaceholder: "pk_live_... (exposed to the site via the config route)",
+			currencyLabel: "Currency",
+			currencyPlaceholder: "usd (ISO code; used when an entry has no currency field)",
+			priceUnitLabel: "Price field unit",
+			priceUnitMajorOption: "Major units (10.99 = $10.99, 1000 = ¥1000)",
+			priceUnitMinorOption: "Minor units (1099 = $10.99; passed to Stripe as-is)",
+			mappingsLabel: "Sellable collections (JSON)",
+			mappingsPlaceholder: "[{\"collection\": \"products\", \"priceField\": \"price\", \"priceIdField\": \"stripePriceId\", \"nameField\": \"name\", \"descriptionField\": \"description\", \"imageField\": \"image\", \"currencyField\": \"currency\"}]",
+			successPathLabel: "Success path",
+			successPathPlaceholder: "/checkout/success",
+			cancelPathLabel: "Cancel path",
+			cancelPathPlaceholder: "/checkout/cancel",
+			allowPromotionCodesLabel: "Allow promotion codes at checkout",
+			automaticTaxLabel: "Automatic tax (requires Stripe Tax)",
+			collectPhoneLabel: "Collect phone number at checkout",
+			consentPromotionsLabel: "Ask for marketing-email consent at checkout (for recovery emails — unavailable in some Stripe account countries, e.g. Japan)",
+			recoveryEnabledLabel: "Keep expired checkouts recoverable (abandoned-cart recovery URL)",
+			shippingCountriesLabel: "Shipping countries",
+			shippingCountriesPlaceholder: "Two-letter ISO codes, comma or newline separated (e.g. US, JP). Empty = do not collect a shipping address.",
+			ordersCollectionLabel: "Orders collection",
+			ordersCollectionPlaceholder: "Optional: collection slug to create an order entry in when a payment succeeds (see README for the field contract).",
+			forwardUrlLabel: "Forward events to URL",
+			forwardUrlPlaceholder: "Optional: https URL that receives verified Stripe events as signed POSTs (X-Emdash-Stripe-Signature).",
+			forwardSecretLabel: "Forwarding secret",
+			forwardSecretPlaceholder: "Shared secret used to HMAC-sign forwarded events (leave blank to keep the current value)",
+			forwardBindingLabel: "Forward via service binding",
+			forwardBindingPlaceholder: "Service binding name (e.g. SELF) — required when the forward URL is this same Worker, which cannot fetch its own hostname.",
+			toastSaved: "Settings saved.",
+			toastSaveFailed: "Failed to save settings.",
+			toastInvalidMappings: "Sellable collections must be a JSON array of {collection: ...} objects.",
+			toastInvalidForwardUrl: "Forward URL must be an http(s) URL.",
+			toastInvalidPath: "Success/cancel paths must start with “/”.",
+			paymentsTitle: "Payments",
+			paymentsIntro: "The most recent payment activity recorded from Stripe webhook events.",
+			colCreatedAt: "Date",
+			colType: "Type",
+			colStatus: "Status",
+			colAmount: "Amount",
+			colEmail: "Email",
+			colDescription: "Description"
+		},
+		errors: {
+			default: "The payment request failed. Please try again shortly.",
+			not_configured: "Payments are not set up yet (missing Stripe secret key).",
+			content_unavailable: "Product data is unavailable right now. Please try again shortly.",
+			invalid_items: "The item list is invalid.",
+			unknown_collection: "This collection is not sellable.",
+			unknown_item: "Product not found.",
+			missing_price: "This product has no valid price.",
+			not_recurring: "This product is not available as a subscription.",
+			recurring_required: "This endpoint only accepts subscription items.",
+			mixed_currencies: "Items in different currencies cannot be purchased together.",
+			price_lookup_failed: "The Stripe price could not be retrieved.",
+			inactive_price: "The Stripe price for this product is inactive.",
+			recurring_requires_subscription: "Subscription items require subscription mode.",
+			recurring_not_supported: "Subscriptions are not supported by this endpoint.",
+			unsupported_price: "This price type cannot be used here.",
+			invalid_amount: "The total amount is invalid.",
+			invalid_trusted: "The trusted request token is invalid or expired.",
+			trusted_not_configured: "Trusted requests are not configured (missing shared secret).",
+			customer_required: "This request requires a customer (trusted token).",
+			consent_country_unsupported: "Marketing-consent collection is not available for this Stripe account's country. Turn the consent setting off.",
+			invalid_session_id: "The checkout session ID is invalid.",
+			stripe_error: "Stripe rejected the request. Please try again shortly."
+		}
+	},
+	ja: {
+		admin: {
+			languageOptionLabel: "日本語",
+			languageFieldLabel: "言語",
+			settingsTitle: "Stripe",
+			settingsIntro: "コンテンツエントリをStripeで販売できます。下の設定で販売対象コレクションをマッピングしてください。各エントリには数値の価格フィールド、またはStripe Price IDフィールドが必要です。APIキーはホスト環境変数(STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY)でも指定できます。",
+			saveButton: "設定を保存",
+			webhookInfo: "Webhookエンドポイント: {url} をStripeダッシュボード(開発者 → Webhook)に登録してください。受信イベントはStripe APIから再取得して真正性を検証するため、署名シークレットは不要です。",
+			keyStatusLive: "シークレットキー: 設定済み(本番モード)。",
+			keyStatusTest: "シークレットキー: 設定済み(テストモード)。",
+			keyStatusMissing: "シークレットキー: 未設定 — ここで設定するか STRIPE_SECRET_KEY を指定するまで決済は無効です。",
+			secretKeyLabel: "シークレットキー",
+			secretKeyPlaceholder: "sk_live_...(空欄なら現在のキーを維持)",
+			publishableKeyLabel: "公開可能キー",
+			publishableKeyPlaceholder: "pk_live_...(configルート経由でサイトに公開されます)",
+			currencyLabel: "通貨",
+			currencyPlaceholder: "jpy(ISOコード。エントリに通貨フィールドが無い場合に使用)",
+			priceUnitLabel: "価格フィールドの単位",
+			priceUnitMajorOption: "主要単位(10.99 = $10.99、1000 = ¥1000)",
+			priceUnitMinorOption: "最小単位(1099 = $10.99。そのままStripeへ渡す)",
+			mappingsLabel: "販売対象コレクション(JSON)",
+			mappingsPlaceholder: "[{\"collection\": \"products\", \"priceField\": \"price\", \"priceIdField\": \"stripePriceId\", \"nameField\": \"name\", \"descriptionField\": \"description\", \"imageField\": \"image\", \"currencyField\": \"currency\"}]",
+			successPathLabel: "決済成功パス",
+			successPathPlaceholder: "/checkout/success",
+			cancelPathLabel: "決済キャンセルパス",
+			cancelPathPlaceholder: "/checkout/cancel",
+			allowPromotionCodesLabel: "チェックアウトでプロモーションコードを許可",
+			automaticTaxLabel: "自動税計算(Stripe Taxが必要)",
+			collectPhoneLabel: "チェックアウトで電話番号を収集",
+			consentPromotionsLabel: "チェックアウトで販促メールの同意を収集(カゴ落ち回収メール用)※日本のStripeアカウントでは利用不可",
+			recoveryEnabledLabel: "期限切れチェックアウトを復元可能にする(カゴ落ち復元URL)",
+			shippingCountriesLabel: "配送先の国",
+			shippingCountriesPlaceholder: "2文字のISOコードをカンマまたは改行区切りで(例: JP, US)。空欄なら配送先住所を収集しません。",
+			ordersCollectionLabel: "注文コレクション",
+			ordersCollectionPlaceholder: "任意: 決済成功時に注文エントリを作成するコレクションのスラッグ(フィールド仕様はREADME参照)。",
+			forwardUrlLabel: "イベント転送先URL",
+			forwardUrlPlaceholder: "任意: 検証済みStripeイベントを署名付きPOST(X-Emdash-Stripe-Signature)で受け取るhttps URL。",
+			forwardSecretLabel: "転送用シークレット",
+			forwardSecretPlaceholder: "転送イベントのHMAC署名に使う共有シークレット(空欄なら現在の値を維持)",
+			forwardBindingLabel: "転送に使うService Binding",
+			forwardBindingPlaceholder: "Binding名(例: SELF)。転送先URLがこのWorker自身の場合は必須(Workerは自分のホスト名へfetchできないため)。",
+			toastSaved: "設定を保存しました。",
+			toastSaveFailed: "設定の保存に失敗しました。",
+			toastInvalidMappings: "販売対象コレクションは {collection: ...} オブジェクトのJSON配列で指定してください。",
+			toastInvalidForwardUrl: "転送先URLは http(s) のURLで指定してください。",
+			toastInvalidPath: "成功/キャンセルパスは「/」で始めてください。",
+			paymentsTitle: "決済履歴",
+			paymentsIntro: "Stripe Webhookイベントから記録された直近の決済アクティビティです。",
+			colCreatedAt: "日時",
+			colType: "種別",
+			colStatus: "ステータス",
+			colAmount: "金額",
+			colEmail: "メール",
+			colDescription: "内容"
+		},
+		errors: {
+			default: "決済の開始に失敗しました。時間をおいてお試しください。",
+			not_configured: "決済の準備ができていません(Stripeシークレットキー未設定)。",
+			content_unavailable: "商品情報を取得できませんでした。時間をおいてお試しください。",
+			invalid_items: "商品の指定が正しくありません。",
+			unknown_collection: "このコレクションは販売対象ではありません。",
+			unknown_item: "商品が見つかりません。",
+			missing_price: "この商品に有効な価格が設定されていません。",
+			not_recurring: "この商品は定期便に対応していません。",
+			recurring_required: "この操作は定期便商品にのみ使えます。",
+			mixed_currencies: "通貨の異なる商品は同時に購入できません。",
+			price_lookup_failed: "Stripeの価格情報を取得できませんでした。",
+			inactive_price: "この商品のStripe価格が無効になっています。",
+			recurring_requires_subscription: "定期便商品はサブスクリプションモードでのみ購入できます。",
+			recurring_not_supported: "この操作では定期便を扱えません。",
+			unsupported_price: "この価格タイプはここでは使用できません。",
+			invalid_amount: "合計金額が正しくありません。",
+			invalid_trusted: "信頼済みリクエストのトークンが不正か期限切れです。",
+			trusted_not_configured: "信頼済みリクエストが未設定です(共有シークレットがありません)。",
+			customer_required: "この操作には顧客情報(trustedトークン)が必要です。",
+			consent_country_unsupported: "このStripeアカウントの国では販促同意の収集を利用できません。同意収集の設定をオフにしてください。",
+			invalid_session_id: "チェックアウトセッションIDが正しくありません。",
+			stripe_error: "Stripeがリクエストを受け付けませんでした。時間をおいてお試しください。"
+		}
+	}
 };
 function getLocale(lang) {
 	return LOCALES[lang];
@@ -665,6 +717,7 @@ const EVENT_ID_RE = /^evt_[A-Za-z0-9]+$/;
 const SESSION_ID_RE = /^cs_[A-Za-z0-9_]+$/;
 const CUSTOMER_ID_RE = /^cus_[A-Za-z0-9]+$/;
 const METADATA_SOURCE = "emdash-stripe";
+/** (exported for tests) */
 async function resolveTrusted(cfg, body) {
 	if (body.trusted === void 0) return { trusted: {} };
 	if (typeof body.trusted !== "string") return fail("invalid_trusted");
@@ -713,7 +766,7 @@ function withSessionParam(url) {
 function urlBase(ctx, routeCtx) {
 	return ctx.site.url || new URL(routeCtx.request.url).origin;
 }
-/** Client-supplied metadata: string→string, capped, reserved keys stripped. */
+/** Client-supplied metadata: string→string, capped, reserved keys stripped. (exported for tests) */
 function sanitizeMetadata(v) {
 	const out = {};
 	if (!v || typeof v !== "object") return out;
@@ -745,7 +798,7 @@ async function findBySlug(ctx, collection, slug) {
 function toNum(v) {
 	return typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
 }
-/** Display name for a recurring line item from the mapping's template. */
+/** Display name for a recurring line item from the mapping's template. (exported for tests) */
 function renderRecurringName(template, name, count, interval) {
 	if (!template) return name;
 	return template.replaceAll("{name}", name).replaceAll("{count}", String(count)).replaceAll("{interval}", interval).slice(0, 250);
@@ -840,7 +893,7 @@ async function resolveItems(ctx, stripe, cfg, origin, input) {
 	if (currencies.size > 1) return fail("mixed_currencies", [...currencies].join(","));
 	return { items };
 }
-/** Compact metadata describing what was bought, for webhooks and host apps. */
+/** Compact metadata describing what was bought, for webhooks and host apps. (exported for tests) */
 function itemsMetadata(items) {
 	let json = JSON.stringify(items.map((i) => ({
 		c: i.collection,
@@ -932,6 +985,7 @@ async function handleCheckout(routeCtx, ctx) {
 			allow_promotion_codes: cfg.allowPromotionCodes
 		} };
 	}
+	if (cfg.lang === "ja") params.locale = "ja";
 	const embedded = body.uiMode === "embedded" || body.uiMode === "embedded_page";
 	if (embedded) {
 		params.ui_mode = "embedded_page";
@@ -952,8 +1006,10 @@ async function handleCheckout(routeCtx, ctx) {
 			url: session.url
 		};
 	} catch (err) {
+		const message = err.message ?? "";
 		ctx.log.error("Failed to create checkout session", err);
-		return fail("stripe_error", err.message);
+		if (params.consent_collection && /consent_collection/.test(message)) return fail("consent_country_unsupported", message);
+		return fail("stripe_error", message);
 	}
 }
 async function handlePaymentIntent(routeCtx, ctx) {
@@ -1000,6 +1056,98 @@ async function handlePaymentIntent(routeCtx, ctx) {
 		};
 	} catch (err) {
 		ctx.log.error("Failed to create payment intent", err);
+		return fail("stripe_error", err.message);
+	}
+}
+/**
+* Create a Subscription for an embedded payment UI: `default_incomplete` +
+* `save_default_payment_method: on_subscription`, returning the first
+* invoice's confirmation client secret for Payment Element to confirm.
+*
+* A subscription always belongs to a customer, so the trusted `customer`
+* field is required — this route cannot be driven by an anonymous caller.
+* price_data items are materialized as reusable Stripe Prices keyed by a
+* deterministic lookup_key (subscriptions.create has no product_data-inline
+* price form).
+*/
+async function handleSubscription(routeCtx, ctx) {
+	const cfg = await loadSettings(ctx);
+	if (!cfg.secretKey) return fail("not_configured");
+	if (!ctx.content) return fail("content_unavailable");
+	const body = routeCtx.input ?? {};
+	const stripe = getStripe(cfg.secretKey);
+	const trustedResult = await resolveTrusted(cfg, body);
+	if ("error" in trustedResult) return trustedResult;
+	const trusted = trustedResult.trusted;
+	if (!trusted.customer) return fail("customer_required");
+	const withRecurring = Array.isArray(body.items) ? body.items.map((i) => i && typeof i === "object" ? {
+		recurring: true,
+		...i
+	} : i) : body.items;
+	const resolved = await resolveItems(ctx, stripe, cfg, urlBase(ctx, routeCtx), withRecurring);
+	if ("error" in resolved) return resolved;
+	const items = resolved.items;
+	if (items.some((i) => !i.recurring)) return fail("recurring_required");
+	const subItems = [];
+	for (const i of items) {
+		if (i.priceId) {
+			subItems.push({
+				price: i.priceId,
+				quantity: i.quantity
+			});
+			continue;
+		}
+		const lookupKey = `emdash_${i.collection}_${i.entryId}_${i.unitAmount}_${i.interval}_${i.intervalCount}`;
+		let priceId;
+		try {
+			priceId = (await stripe.prices.list({
+				lookup_keys: [lookupKey],
+				active: true,
+				limit: 1
+			})).data[0]?.id;
+			if (!priceId) priceId = (await stripe.prices.create({
+				currency: i.currency,
+				unit_amount: i.unitAmount,
+				recurring: {
+					interval: i.interval,
+					interval_count: i.intervalCount ?? 1
+				},
+				product_data: { name: i.name },
+				lookup_key: lookupKey
+			})).id;
+		} catch (err) {
+			ctx.log.error(`Failed to resolve a recurring price for ${lookupKey}`, err);
+			return fail("price_lookup_failed", lookupKey);
+		}
+		subItems.push({
+			price: priceId,
+			quantity: i.quantity
+		});
+	}
+	const metadata = {
+		source: METADATA_SOURCE,
+		...itemsMetadata(items),
+		...sanitizeMetadata(body.metadata)
+	};
+	try {
+		const sub = await stripe.subscriptions.create({
+			customer: trusted.customer,
+			items: subItems,
+			payment_behavior: "default_incomplete",
+			payment_settings: { save_default_payment_method: "on_subscription" },
+			expand: ["latest_invoice.confirmation_secret"],
+			metadata
+		});
+		const clientSecret = sub.latest_invoice?.confirmation_secret?.client_secret ?? null;
+		if (!clientSecret) return fail("stripe_error", "no confirmation secret on the first invoice");
+		return {
+			ok: true,
+			id: sub.id,
+			clientSecret,
+			status: sub.status
+		};
+	} catch (err) {
+		ctx.log.error("Failed to create subscription", err);
 		return fail("stripe_error", err.message);
 	}
 }
@@ -1294,18 +1442,45 @@ async function handleWebhook(routeCtx, ctx) {
 		type: event.type
 	};
 }
+/**
+* Attach a localized human-readable `message` (from the Language setting) to
+* failure responses. The machine `error` code is the stable contract; the
+* message saves hosts from maintaining their own code→copy table. The webhook
+* route stays unwrapped — its consumer is Stripe, not a person.
+*/
+function localized(handler) {
+	return async (routeCtx, ctx) => {
+		const result = await handler(routeCtx, ctx);
+		if (result && typeof result === "object" && result.ok === false) {
+			const code = result.error;
+			if (typeof code === "string") {
+				const errors = getLocale(normalizeLang(await getStr(ctx, K.language, "en"))).errors;
+				const table = { ...errors };
+				return {
+					...result,
+					message: table[code] ?? errors.default
+				};
+			}
+		}
+		return result;
+	};
+}
 var sandbox_entry_default = { routes: {
 	checkout: {
 		public: true,
-		handler: handleCheckout
+		handler: localized(handleCheckout)
 	},
 	"payment-intent": {
 		public: true,
-		handler: handlePaymentIntent
+		handler: localized(handlePaymentIntent)
+	},
+	subscription: {
+		public: true,
+		handler: localized(handleSubscription)
 	},
 	session: {
 		public: true,
-		handler: handleSession
+		handler: localized(handleSession)
 	},
 	config: {
 		public: true,
@@ -1318,4 +1493,4 @@ var sandbox_entry_default = { routes: {
 	admin: { handler: handleAdmin }
 } };
 //#endregion
-export { sandbox_entry_default as default };
+export { sandbox_entry_default as default, itemsMetadata, renderRecurringName, resolveTrusted, sanitizeMetadata };

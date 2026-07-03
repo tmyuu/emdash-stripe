@@ -10,6 +10,7 @@
  *
  *   - `checkout`       (public) — create a hosted or embedded Checkout Session
  *   - `payment-intent` (public) — create a PaymentIntent for custom payment UIs
+ *   - `subscription`   (public) — create a Subscription for custom payment UIs
  *   - `session`        (public) — read a session's status (success pages)
  *   - `config`         (public) — publishable key + sellable collections
  *   - `webhook`        (public) — Stripe webhook endpoint
@@ -58,7 +59,7 @@ import type { PluginDescriptor } from "emdash";
 export function stripePayments(): PluginDescriptor {
   return {
     id: "stripe",
-    version: "0.4.1",
+    version: "0.5.0",
     format: "standard",
     entrypoint: "emdash-stripe/sandbox",
     // content:read — resolve sellable entries (names/prices) server-side.
