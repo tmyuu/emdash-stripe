@@ -56,6 +56,28 @@ export default defineConfig({
    ```
 
    Only `collection` is required; the values above are the defaults (`descriptionField`/`imageField`/`currencyField` are off unless set). Only **published** entries are sellable.
+
+   To sell an entry as a **subscription without a Stripe Price** (inline
+   `price_data.recurring`, CMS stays the source of truth), add recurring
+   fields to its mapping — request items opt in with `"recurring": true`:
+
+   ```json
+   {
+     "collection": "products",
+     "recurringEnabledField": "subscription_enabled",
+     "recurringPriceField": "subscription_price",
+     "recurringIntervalCountField": "subscription_interval_months",
+     "recurringNameTemplate": "{name} — every {count} {interval}(s)"
+   }
+   ```
+
+   `recurringPriceField` falls back to `priceField`; the interval comes from
+   `recurringIntervalField` (entry value `day`/`week`/`month`/`year`) or the
+   fixed `recurringInterval` (default `month`); the count from
+   `recurringIntervalCountField` or the fixed `recurringIntervalCount`
+   (default 1). `recurringEnabledField`, when set, gates which entries may
+   recur. `recurringNameTemplate` renders the line-item display name
+   (placeholders `{name}`, `{count}`, `{interval}`).
 3. **Currency & price unit** — set the default currency (used when an entry has no currency field) and how numeric prices are interpreted: **major units** (`10.99` = $10.99, `1000` = ¥1000 — zero/three-decimal currencies handled per Stripe rules) or **minor units** (passed as-is).
 4. **Webhook** — register the URL shown on the settings page (`https://your-site/_emdash/api/plugins/stripe/webhook`) in the Stripe Dashboard → Developers → Webhooks. Recommended events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `payment_intent.succeeded`, `payment_intent.payment_failed`, `charge.refunded`, and for subscriptions `customer.subscription.*`, `invoice.paid`, `invoice.payment_failed`. No signing secret is needed (see [Webhook model](#webhook-model)).
 
@@ -63,26 +85,32 @@ export default defineConfig({
 
 All routes are `POST` with a JSON body, mounted at `/_emdash/api/plugins/stripe/<route>`.
 
+> **Response envelope**: EmDash wraps plugin route responses in
+> `{ "data": <payload> }`. The payloads documented below are what you find
+> under `data`.
+
 ### `checkout` — create a Checkout Session
 
 ```jsonc
 {
   "items": [{ "collection": "products", "id": "abc123", "quantity": 2 }],
   // or reference by slug: { "slug": "herbal-tea", "quantity": 1 }
+  // or sell as a subscription (mapping's recurring fields): { "slug": "herbal-tea", "recurring": true }
   "uiMode": "hosted",              // "hosted" (default) or "embedded"
-  "mode": "payment",               // optional; auto-detects "subscription" for recurring Prices
+  "mode": "payment",               // optional; auto-detects "subscription" for recurring items
   "successPath": "/thanks",        // optional site-relative overrides
   "cancelPath": "/cart",
-  "customerEmail": "a@example.com",// optional
+  "customerEmail": "a@example.com",// optional (ignored when a trusted customer is attached)
   "clientReference": "order-42",   // optional → client_reference_id
-  "metadata": { "note": "gift" }   // optional, forwarded to Stripe metadata
+  "metadata": { "note": "gift" },  // optional → session metadata + (payment mode) PI metadata
+  "trusted": "v1.…"                // optional host-signed token (see Host-signed requests)
 }
 ```
 
 Hosted response: `{ "ok": true, "id": "cs_...", "url": "https://checkout.stripe.com/..." }` → redirect the browser to `url`.
 Embedded response: `{ "ok": true, "id": "cs_...", "clientSecret": "cs_..._secret_..." }` → pass to Stripe.js embedded checkout.
 
-`collection` defaults to the first mapping. Promotion codes, automatic tax, phone collection, and shipping-address countries are toggled globally on the settings page. A `session_id={CHECKOUT_SESSION_ID}` query parameter is appended to the success/return URL.
+`collection` defaults to the first mapping. Promotion codes, automatic tax, phone collection, shipping-address countries, **marketing-consent collection** (`consent_collection.promotions`), and **abandoned-checkout recovery** (`after_expiration.recovery` — recovery URLs arrive on `checkout.session.expired`) are toggled globally on the settings page. In payment mode the item summary and client `metadata` also ride on the PaymentIntent (`payment_intent_data.description` / `.metadata`) so host order records can key off the PI. A `session_id={CHECKOUT_SESSION_ID}` query parameter is appended to the success/return URL.
 
 ```html
 <button id="buy">Buy</button>
@@ -106,11 +134,49 @@ Embedded response: `{ "ok": true, "id": "cs_...", "clientSecret": "cs_..._secret
   "items": [{ "id": "abc123", "quantity": 1 }],
   "receiptEmail": "a@example.com",  // optional
   "description": "…",               // optional
-  "metadata": {}                    // optional
+  "metadata": {},                   // optional
+  "trusted": "v1.…"                 // optional host-signed token (customer, setupFutureUsage)
 }
 ```
 
 Response: `{ "ok": true, "id": "pi_...", "clientSecret": "pi_..._secret_...", "amount": 1099, "currency": "usd" }`. One-time prices only (subscriptions require Checkout).
+
+### Host-signed requests (`trusted`)
+
+Some parameters act on a Stripe Customer and must never be public-caller
+controlled — anyone could otherwise mint sessions against someone else's
+saved cards. The host application (which owns authentication) passes them in
+a `trusted` token signed with the **forwarding secret** (the host↔plugin
+shared secret, same scheme as forwarded events, opposite direction):
+
+```
+trusted = "v1." + t + "." + payloadB64 + "." + hex(HMAC-SHA256(secret, t + "." + payloadB64))
+```
+
+where `t` is a unix timestamp (±300 s accepted) and `payloadB64` is
+base64url-encoded JSON. Supported payload fields:
+
+| Field | Routes | Effect |
+|---|---|---|
+| `customer` | `checkout`, `payment-intent` | Attach an existing Customer (`cus_…`) — saved cards, subscription-customer linkage |
+| `setupFutureUsage` | `payment-intent` | `on_session` / `off_session` (requires `customer`) |
+
+```ts
+async function trustedToken(secret: string, payload: object): Promise<string> {
+  const t = Math.floor(Date.now() / 1000);
+  const b64 = btoa(JSON.stringify(payload)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", key, enc.encode(`${t}.${b64}`));
+  const hex = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `v1.${t}.${b64}.${hex}`;
+}
+```
+
+A request with a malformed, stale, or mis-signed token fails with
+`invalid_trusted`; setting `trusted` while no forwarding secret is configured
+fails with `trusted_not_configured`.
 
 ### `session` — success-page status lookup
 
@@ -196,7 +262,12 @@ Leave the setting blank when forwarding to a different origin.
 
 ## Subscriptions
 
-Give an entry a Stripe Price ID (`priceIdField`) pointing at a **recurring** Price; `checkout` auto-switches to subscription mode (or pass `"mode": "subscription"`). Subscription lifecycle and invoice events are recorded, and session metadata is propagated to the Subscription so events trace back to CMS entries. Recurring `price_data` (CMS-defined intervals) is not supported in v1 — Stripe-managed Prices are the right tool there.
+Two paths, both auto-switching `checkout` to subscription mode (or pass `"mode": "subscription"`):
+
+- **Stripe Price ID** — give an entry a `priceIdField` pointing at a **recurring** Price (Stripe manages the catalog).
+- **Inline recurring `price_data`** — configure the mapping's recurring fields (see [Setup §2](#setup)) and send `"recurring": true` on the item; price and billing interval come from the CMS entry.
+
+Subscription lifecycle and invoice events are recorded, and session metadata is propagated to the Subscription so events trace back to CMS entries.
 
 ## Notes & limitations
 

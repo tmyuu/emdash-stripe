@@ -78,3 +78,36 @@ export async function hmacSha256Hex(secret: string, payload: string): Promise<st
   const sig = await crypto.subtle.sign("HMAC", key, enc.encode(payload));
   return Array.from(new Uint8Array(sig), (b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+// --- host-signed request tokens --------------------------------------------------
+/** Shared max age (seconds) for host-signed tokens, mirroring the forward scheme. */
+export const TRUSTED_TOKEN_TOLERANCE_SEC = 300;
+
+/**
+ * Verify a host-signed request token and return its payload, or null.
+ *
+ * Format: `v1.<unix>.<base64url(json)>.<hex>` where
+ * `hex = HMAC-SHA256(secret, "<unix>.<base64url(json)>")` — the same secret
+ * and signature scheme as forwarded events, in the opposite direction. The
+ * signature covers the exact encoded string, so no canonicalization is
+ * involved; EmDash's body pre-parsing cannot break it. Tokens older (or
+ * newer) than the tolerance are rejected.
+ */
+export async function verifyTrustedToken(
+  secret: string,
+  token: string,
+): Promise<Record<string, unknown> | null> {
+  const m = token.match(/^v1\.(\d+)\.([A-Za-z0-9_-]+)\.([0-9a-f]{64})$/);
+  if (!m) return null;
+  const [, t, payloadB64, sig] = m;
+  if (Math.abs(Date.now() / 1000 - Number(t)) > TRUSTED_TOKEN_TOLERANCE_SEC) return null;
+  if ((await hmacSha256Hex(secret, `${t}.${payloadB64}`)) !== sig) return null;
+  try {
+    const parsed: unknown = JSON.parse(atob(payloadB64!.replace(/-/g, "+").replace(/_/g, "/")));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}

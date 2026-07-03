@@ -1,6 +1,6 @@
 {
   "name": "emdash-stripe",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "EmDash CMS plugin: Stripe payments for content entries. Hosted/embedded Checkout, Payment Intents, subscriptions via Stripe Prices, signature-verified webhooks, payment records, optional CMS order entries and event forwarding. CMS entries are the source of truth for what is sellable.",
   "type": "module",
   "main": "dist/index.mjs",

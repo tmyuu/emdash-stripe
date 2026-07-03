@@ -62,6 +62,8 @@ export interface AdminMessages {
   allowPromotionCodesLabel: string;
   automaticTaxLabel: string;
   collectPhoneLabel: string;
+  consentPromotionsLabel: string;
+  recoveryEnabledLabel: string;
   shippingCountriesLabel: string;
   shippingCountriesPlaceholder: string;
   ordersCollectionLabel: string;
@@ -130,6 +132,8 @@ const en: Locale = {
     allowPromotionCodesLabel: "Allow promotion codes at checkout",
     automaticTaxLabel: "Automatic tax (requires Stripe Tax)",
     collectPhoneLabel: "Collect phone number at checkout",
+    consentPromotionsLabel: "Ask for marketing-email consent at checkout (for recovery emails)",
+    recoveryEnabledLabel: "Keep expired checkouts recoverable (abandoned-cart recovery URL)",
     shippingCountriesLabel: "Shipping countries",
     shippingCountriesPlaceholder:
       "Two-letter ISO codes, comma or newline separated (e.g. US, JP). Empty = do not collect a shipping address.",
@@ -199,6 +203,8 @@ const ja: Locale = {
     allowPromotionCodesLabel: "チェックアウトでプロモーションコードを許可",
     automaticTaxLabel: "自動税計算(Stripe Taxが必要)",
     collectPhoneLabel: "チェックアウトで電話番号を収集",
+    consentPromotionsLabel: "チェックアウトで販促メールの同意を収集(カゴ落ち回収メール用)",
+    recoveryEnabledLabel: "期限切れチェックアウトを復元可能にする(カゴ落ち復元URL)",
     shippingCountriesLabel: "配送先の国",
     shippingCountriesPlaceholder:
       "2文字のISOコードをカンマまたは改行区切りで(例: JP, US)。空欄なら配送先住所を収集しません。",

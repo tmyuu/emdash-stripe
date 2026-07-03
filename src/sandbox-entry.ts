@@ -42,15 +42,56 @@ import type {
 } from "emdash/plugin";
 import { env as cfEnv } from "cloudflare:workers";
 import type Stripe from "stripe";
-import { getStripe, toMinorUnits, hmacSha256Hex } from "./stripe.js";
-import { loadSettings, type CollectionMapping, type Settings } from "./config.js";
+import { getStripe, toMinorUnits, hmacSha256Hex, verifyTrustedToken } from "./stripe.js";
+import {
+  loadSettings,
+  asRecurringInterval,
+  type CollectionMapping,
+  type RecurringInterval,
+  type Settings,
+} from "./config.js";
 import { handleAdmin } from "./admin.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRICE_ID_RE = /^price_[A-Za-z0-9]+$/;
 const EVENT_ID_RE = /^evt_[A-Za-z0-9]+$/;
 const SESSION_ID_RE = /^cs_[A-Za-z0-9_]+$/;
+const CUSTOMER_ID_RE = /^cus_[A-Za-z0-9]+$/;
 const METADATA_SOURCE = "emdash-stripe";
+
+// --- host-signed requests --------------------------------------------------------
+/**
+ * Fields only the host application may set (they act on someone's Stripe
+ * Customer), carried as a `trusted` token the host signs with the shared
+ * forwarding secret. A public caller cannot mint one.
+ */
+interface TrustedFields {
+  customer?: string;
+  setupFutureUsage?: "on_session" | "off_session";
+}
+
+type TrustedResult = { trusted: TrustedFields } | { ok: false; error: string };
+
+async function resolveTrusted(cfg: Settings, body: Record<string, unknown>): Promise<TrustedResult> {
+  if (body.trusted === undefined) return { trusted: {} };
+  if (typeof body.trusted !== "string") return fail("invalid_trusted");
+  if (!cfg.forwardSecret) return fail("trusted_not_configured");
+  const payload = await verifyTrustedToken(cfg.forwardSecret, body.trusted);
+  if (!payload) return fail("invalid_trusted");
+  const trusted: TrustedFields = {};
+  const customer = str(payload.customer);
+  if (customer) {
+    if (!CUSTOMER_ID_RE.test(customer)) return fail("invalid_trusted");
+    trusted.customer = customer;
+  }
+  if (payload.setupFutureUsage !== undefined) {
+    if (payload.setupFutureUsage !== "on_session" && payload.setupFutureUsage !== "off_session") {
+      return fail("invalid_trusted");
+    }
+    trusted.setupFutureUsage = payload.setupFutureUsage;
+  }
+  return { trusted };
+}
 
 function fail(error: string, detail?: string): { ok: false; error: string; detail?: string } {
   return detail ? { ok: false, error, detail } : { ok: false, error };
@@ -91,6 +132,8 @@ interface ItemInput {
   id?: unknown;
   slug?: unknown;
   quantity?: unknown;
+  /** `true` sells the entry as a subscription via the mapping's recurring fields. */
+  recurring?: unknown;
 }
 
 interface ResolvedItem {
@@ -104,6 +147,9 @@ interface ResolvedItem {
   priceId?: string;
   /** Minor units. Set for price_data items and for retrieved fixed-amount Prices. */
   unitAmount: number | null;
+  /** Billing cadence for recurring price_data items. */
+  interval?: RecurringInterval;
+  intervalCount?: number;
   description?: string;
   image?: string;
 }
@@ -128,6 +174,25 @@ async function findBySlug(
     cursor = result.cursor;
   }
   return null;
+}
+
+function toNum(v: unknown): number {
+  return typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+}
+
+/** Display name for a recurring line item from the mapping's template. */
+function renderRecurringName(
+  template: string | undefined,
+  name: string,
+  count: number,
+  interval: RecurringInterval,
+): string {
+  if (!template) return name;
+  return template
+    .replaceAll("{name}", name)
+    .replaceAll("{count}", String(count))
+    .replaceAll("{interval}", interval)
+    .slice(0, 250);
 }
 
 function resolveImage(ctx: PluginContext, v: unknown): string | undefined {
@@ -200,14 +265,47 @@ async function resolveItems(
       continue;
     }
 
-    const priceRaw = data[mapping.priceField];
-    const priceNum =
-      typeof priceRaw === "number" ? priceRaw : typeof priceRaw === "string" ? Number(priceRaw) : NaN;
+    const currency =
+      (mapping.currencyField && str(data[mapping.currencyField])?.toLowerCase()) || cfg.currency;
+
+    // Recurring price_data path: the request opts in per item, the mapping
+    // says which entry fields define the subscription.
+    if (raw.recurring === true) {
+      if (mapping.recurringEnabledField && !data[mapping.recurringEnabledField]) {
+        return fail("not_recurring", `${mapping.collection}/${entry.id}`);
+      }
+      const priceNum = toNum(data[mapping.recurringPriceField ?? mapping.priceField]);
+      if (!Number.isFinite(priceNum) || priceNum <= 0) {
+        return fail("missing_price", `${mapping.collection}/${entry.id}`);
+      }
+      const interval =
+        (mapping.recurringIntervalField && asRecurringInterval(data[mapping.recurringIntervalField])) ||
+        mapping.recurringInterval ||
+        "month";
+      const countNum = mapping.recurringIntervalCountField
+        ? toNum(data[mapping.recurringIntervalCountField])
+        : NaN;
+      const intervalCount =
+        Number.isInteger(countNum) && countNum >= 1 ? countNum : (mapping.recurringIntervalCount ?? 1);
+      items.push({
+        collection: mapping.collection,
+        entryId: entry.id,
+        name: renderRecurringName(mapping.recurringNameTemplate, name, intervalCount, interval),
+        quantity,
+        currency,
+        recurring: true,
+        unitAmount:
+          cfg.priceUnit === "minor" ? Math.round(priceNum) : toMinorUnits(priceNum, currency),
+        interval,
+        intervalCount,
+      });
+      continue;
+    }
+
+    const priceNum = toNum(data[mapping.priceField]);
     if (!Number.isFinite(priceNum) || priceNum < 0) {
       return fail("missing_price", `${mapping.collection}/${entry.id}`);
     }
-    const currency =
-      (mapping.currencyField && str(data[mapping.currencyField])?.toLowerCase()) || cfg.currency;
     const unitAmount =
       cfg.priceUnit === "minor" ? Math.round(priceNum) : toMinorUnits(priceNum, currency);
     items.push({
@@ -250,6 +348,10 @@ async function handleCheckout(routeCtx: SandboxedRouteContext, ctx: PluginContex
   const body = (routeCtx.input ?? {}) as Record<string, unknown>;
   const stripe = getStripe(cfg.secretKey);
 
+  const trustedResult = await resolveTrusted(cfg, body);
+  if ("error" in trustedResult) return trustedResult;
+  const trusted = trustedResult.trusted;
+
   const resolved = await resolveItems(ctx, stripe, cfg, body.items);
   if ("error" in resolved) return resolved;
   const items = resolved.items;
@@ -276,15 +378,24 @@ async function handleCheckout(routeCtx: SandboxedRouteContext, ctx: PluginContex
               ...(i.description ? { description: i.description } : {}),
               ...(i.image ? { images: [i.image] } : {}),
             },
+            ...(i.recurring && i.interval
+              ? { recurring: { interval: i.interval, interval_count: i.intervalCount ?? 1 } }
+              : {}),
           },
         },
   );
 
-  const metadata = { source: METADATA_SOURCE, ...itemsMetadata(items), ...sanitizeMetadata(body.metadata) };
+  const meta = itemsMetadata(items);
+  const clientMetadata = sanitizeMetadata(body.metadata);
+  const metadata = { source: METADATA_SOURCE, ...meta, ...clientMetadata };
   const params: Stripe.Checkout.SessionCreateParams = { mode, line_items: lineItems, metadata };
 
+  if (trusted.customer) params.customer = trusted.customer;
   const customerEmail = str(body.customerEmail);
-  if (customerEmail && EMAIL_RE.test(customerEmail)) params.customer_email = customerEmail;
+  // customer and customer_email are mutually exclusive on the Stripe API.
+  if (!params.customer && customerEmail && EMAIL_RE.test(customerEmail)) {
+    params.customer_email = customerEmail;
+  }
   const clientReference = str(body.clientReference);
   if (clientReference && /^[\w.-]{1,200}$/.test(clientReference)) {
     params.client_reference_id = clientReference;
@@ -299,10 +410,24 @@ async function handleCheckout(routeCtx: SandboxedRouteContext, ctx: PluginContex
     };
   }
   // Propagate metadata to the Subscription so subscription webhook events can
-  // be traced back to CMS entries. (Not done for PaymentIntents on purpose:
-  // session-created PIs are recorded via their session, and marking them
-  // would double-record.)
+  // be traced back to CMS entries.
   if (mode === "subscription") params.subscription_data = { metadata };
+  if (mode === "payment") {
+    // Ride the description and metadata on the PaymentIntent too — hosts key
+    // order records off the PI. `source` stays session-only: the webhook
+    // records session-created PIs via their session, and marking the PI as
+    // plugin-created would double-record.
+    params.payment_intent_data = {
+      description: meta.emdash_desc,
+      metadata: { ...meta, ...clientMetadata },
+    };
+    if (cfg.consentPromotions) params.consent_collection = { promotions: "auto" };
+    if (cfg.recoveryEnabled) {
+      params.after_expiration = {
+        recovery: { enabled: true, allow_promotion_codes: cfg.allowPromotionCodes },
+      };
+    }
+  }
 
   // Stripe requires absolute URLs; ctx.url() resolves against the site origin.
   const embedded = body.uiMode === "embedded" || body.uiMode === "embedded_page";
@@ -334,6 +459,10 @@ async function handlePaymentIntent(routeCtx: SandboxedRouteContext, ctx: PluginC
   const body = (routeCtx.input ?? {}) as Record<string, unknown>;
   const stripe = getStripe(cfg.secretKey);
 
+  const trustedResult = await resolveTrusted(cfg, body);
+  if ("error" in trustedResult) return trustedResult;
+  const trusted = trustedResult.trusted;
+
   const resolved = await resolveItems(ctx, stripe, cfg, body.items);
   if ("error" in resolved) return resolved;
   const items = resolved.items;
@@ -354,6 +483,11 @@ async function handlePaymentIntent(routeCtx: SandboxedRouteContext, ctx: PluginC
     metadata: { source: METADATA_SOURCE, ...meta, ...sanitizeMetadata(body.metadata) },
     automatic_payment_methods: { enabled: true },
   };
+  if (trusted.customer) params.customer = trusted.customer;
+  // Saving the payment method for later requires an attached customer.
+  if (trusted.setupFutureUsage && trusted.customer) {
+    params.setup_future_usage = trusted.setupFutureUsage;
+  }
   const receiptEmail = str(body.receiptEmail);
   if (receiptEmail && EMAIL_RE.test(receiptEmail)) params.receipt_email = receiptEmail;
 

@@ -78,6 +78,29 @@ async function hmacSha256Hex(secret, payload) {
 	const sig = await crypto.subtle.sign("HMAC", key, enc.encode(payload));
 	return Array.from(new Uint8Array(sig), (b) => b.toString(16).padStart(2, "0")).join("");
 }
+/**
+* Verify a host-signed request token and return its payload, or null.
+*
+* Format: `v1.<unix>.<base64url(json)>.<hex>` where
+* `hex = HMAC-SHA256(secret, "<unix>.<base64url(json)>")` — the same secret
+* and signature scheme as forwarded events, in the opposite direction. The
+* signature covers the exact encoded string, so no canonicalization is
+* involved; EmDash's body pre-parsing cannot break it. Tokens older (or
+* newer) than the tolerance are rejected.
+*/
+async function verifyTrustedToken(secret, token) {
+	const m = token.match(/^v1\.(\d+)\.([A-Za-z0-9_-]+)\.([0-9a-f]{64})$/);
+	if (!m) return null;
+	const [, t, payloadB64, sig] = m;
+	if (Math.abs(Date.now() / 1e3 - Number(t)) > 300) return null;
+	if (await hmacSha256Hex(secret, `${t}.${payloadB64}`) !== sig) return null;
+	try {
+		const parsed = JSON.parse(atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/")));
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+	} catch {
+		return null;
+	}
+}
 //#endregion
 //#region src/i18n.ts
 /** Supported languages, in the order shown in the settings dropdown. */
@@ -117,6 +140,8 @@ const LOCALES = {
 		allowPromotionCodesLabel: "Allow promotion codes at checkout",
 		automaticTaxLabel: "Automatic tax (requires Stripe Tax)",
 		collectPhoneLabel: "Collect phone number at checkout",
+		consentPromotionsLabel: "Ask for marketing-email consent at checkout (for recovery emails)",
+		recoveryEnabledLabel: "Keep expired checkouts recoverable (abandoned-cart recovery URL)",
 		shippingCountriesLabel: "Shipping countries",
 		shippingCountriesPlaceholder: "Two-letter ISO codes, comma or newline separated (e.g. US, JP). Empty = do not collect a shipping address.",
 		ordersCollectionLabel: "Orders collection",
@@ -169,6 +194,8 @@ const LOCALES = {
 		allowPromotionCodesLabel: "チェックアウトでプロモーションコードを許可",
 		automaticTaxLabel: "自動税計算(Stripe Taxが必要)",
 		collectPhoneLabel: "チェックアウトで電話番号を収集",
+		consentPromotionsLabel: "チェックアウトで販促メールの同意を収集(カゴ落ち回収メール用)",
+		recoveryEnabledLabel: "期限切れチェックアウトを復元可能にする(カゴ落ち復元URL)",
 		shippingCountriesLabel: "配送先の国",
 		shippingCountriesPlaceholder: "2文字のISOコードをカンマまたは改行区切りで(例: JP, US)。空欄なら配送先住所を収集しません。",
 		ordersCollectionLabel: "注文コレクション",
@@ -211,12 +238,23 @@ const K = {
 	allowPromotionCodes: "settings:allowPromotionCodes",
 	automaticTax: "settings:automaticTax",
 	collectPhone: "settings:collectPhone",
+	consentPromotions: "settings:consentPromotions",
+	recoveryEnabled: "settings:recoveryEnabled",
 	shippingCountries: "settings:shippingCountries",
 	ordersCollection: "settings:ordersCollection",
 	forwardUrl: "settings:forwardUrl",
 	forwardSecret: "settings:forwardSecret",
 	forwardBinding: "settings:forwardBinding"
 };
+const RECURRING_INTERVALS = [
+	"day",
+	"week",
+	"month",
+	"year"
+];
+function asRecurringInterval(v) {
+	return typeof v === "string" && RECURRING_INTERVALS.includes(v) ? v : void 0;
+}
 const DEFAULT_MAPPINGS = [{
 	collection: "products",
 	priceField: "price",
@@ -233,6 +271,7 @@ function parseMappings(raw) {
 		for (const m of parsed) {
 			if (!m || typeof m !== "object" || typeof m.collection !== "string" || !m.collection) return DEFAULT_MAPPINGS;
 			const str = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+			const count = typeof m.recurringIntervalCount === "number" ? m.recurringIntervalCount : NaN;
 			mappings.push({
 				collection: m.collection,
 				priceField: str(m.priceField) ?? "price",
@@ -240,7 +279,14 @@ function parseMappings(raw) {
 				nameField: str(m.nameField) ?? "name",
 				descriptionField: str(m.descriptionField),
 				imageField: str(m.imageField),
-				currencyField: str(m.currencyField)
+				currencyField: str(m.currencyField),
+				recurringEnabledField: str(m.recurringEnabledField),
+				recurringPriceField: str(m.recurringPriceField),
+				recurringIntervalField: str(m.recurringIntervalField),
+				recurringInterval: asRecurringInterval(m.recurringInterval),
+				recurringIntervalCountField: str(m.recurringIntervalCountField),
+				recurringIntervalCount: Number.isInteger(count) && count >= 1 ? count : void 0,
+				recurringNameTemplate: str(m.recurringNameTemplate)
 			});
 		}
 		return mappings;
@@ -286,6 +332,8 @@ async function loadSettings(ctx) {
 		allowPromotionCodes: await getStr(ctx, K.allowPromotionCodes) === "1",
 		automaticTax: await getStr(ctx, K.automaticTax) === "1",
 		collectPhone: await getStr(ctx, K.collectPhone) === "1",
+		consentPromotions: await getStr(ctx, K.consentPromotions) === "1",
+		recoveryEnabled: await getStr(ctx, K.recoveryEnabled) === "1",
 		shippingCountries: splitCountries(await getStr(ctx, K.shippingCountries)),
 		ordersCollection: (await getStr(ctx, K.ordersCollection)).trim(),
 		forwardUrl: (await getStr(ctx, K.forwardUrl)).trim(),
@@ -408,6 +456,18 @@ async function buildSettingsPage(ctx) {
 					initial_value: cfg.collectPhone
 				},
 				{
+					type: "toggle",
+					action_id: "consentPromotions",
+					label: t.consentPromotionsLabel,
+					initial_value: cfg.consentPromotions
+				},
+				{
+					type: "toggle",
+					action_id: "recoveryEnabled",
+					label: t.recoveryEnabledLabel,
+					initial_value: cfg.recoveryEnabled
+				},
+				{
 					type: "text_input",
 					action_id: "shippingCountries",
 					label: t.shippingCountriesLabel,
@@ -492,7 +552,9 @@ async function saveSettings(ctx, values) {
 		for (const [key, kvKey] of [
 			["allowPromotionCodes", K.allowPromotionCodes],
 			["automaticTax", K.automaticTax],
-			["collectPhone", K.collectPhone]
+			["collectPhone", K.collectPhone],
+			["consentPromotions", K.consentPromotions],
+			["recoveryEnabled", K.recoveryEnabled]
 		]) if (values[key] === true) await ctx.kv.set(kvKey, "1");
 		else await ctx.kv.delete(kvKey);
 		for (const [key, kvKey] of [["secretKey", K.secretKey], ["forwardSecret", K.forwardSecret]]) {
@@ -601,7 +663,26 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRICE_ID_RE = /^price_[A-Za-z0-9]+$/;
 const EVENT_ID_RE = /^evt_[A-Za-z0-9]+$/;
 const SESSION_ID_RE = /^cs_[A-Za-z0-9_]+$/;
+const CUSTOMER_ID_RE = /^cus_[A-Za-z0-9]+$/;
 const METADATA_SOURCE = "emdash-stripe";
+async function resolveTrusted(cfg, body) {
+	if (body.trusted === void 0) return { trusted: {} };
+	if (typeof body.trusted !== "string") return fail("invalid_trusted");
+	if (!cfg.forwardSecret) return fail("trusted_not_configured");
+	const payload = await verifyTrustedToken(cfg.forwardSecret, body.trusted);
+	if (!payload) return fail("invalid_trusted");
+	const trusted = {};
+	const customer = str(payload.customer);
+	if (customer) {
+		if (!CUSTOMER_ID_RE.test(customer)) return fail("invalid_trusted");
+		trusted.customer = customer;
+	}
+	if (payload.setupFutureUsage !== void 0) {
+		if (payload.setupFutureUsage !== "on_session" && payload.setupFutureUsage !== "off_session") return fail("invalid_trusted");
+		trusted.setupFutureUsage = payload.setupFutureUsage;
+	}
+	return { trusted };
+}
 function fail(error, detail) {
 	return detail ? {
 		ok: false,
@@ -651,6 +732,14 @@ async function findBySlug(ctx, collection, slug) {
 		cursor = result.cursor;
 	}
 	return null;
+}
+function toNum(v) {
+	return typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+}
+/** Display name for a recurring line item from the mapping's template. */
+function renderRecurringName(template, name, count, interval) {
+	if (!template) return name;
+	return template.replaceAll("{name}", name).replaceAll("{count}", String(count)).replaceAll("{interval}", interval).slice(0, 250);
 }
 function resolveImage(ctx, v) {
 	let url;
@@ -702,10 +791,29 @@ async function resolveItems(ctx, stripe, cfg, input) {
 			});
 			continue;
 		}
-		const priceRaw = data[mapping.priceField];
-		const priceNum = typeof priceRaw === "number" ? priceRaw : typeof priceRaw === "string" ? Number(priceRaw) : NaN;
-		if (!Number.isFinite(priceNum) || priceNum < 0) return fail("missing_price", `${mapping.collection}/${entry.id}`);
 		const currency = mapping.currencyField && str(data[mapping.currencyField])?.toLowerCase() || cfg.currency;
+		if (raw.recurring === true) {
+			if (mapping.recurringEnabledField && !data[mapping.recurringEnabledField]) return fail("not_recurring", `${mapping.collection}/${entry.id}`);
+			const priceNum = toNum(data[mapping.recurringPriceField ?? mapping.priceField]);
+			if (!Number.isFinite(priceNum) || priceNum <= 0) return fail("missing_price", `${mapping.collection}/${entry.id}`);
+			const interval = mapping.recurringIntervalField && asRecurringInterval(data[mapping.recurringIntervalField]) || mapping.recurringInterval || "month";
+			const countNum = mapping.recurringIntervalCountField ? toNum(data[mapping.recurringIntervalCountField]) : NaN;
+			const intervalCount = Number.isInteger(countNum) && countNum >= 1 ? countNum : mapping.recurringIntervalCount ?? 1;
+			items.push({
+				collection: mapping.collection,
+				entryId: entry.id,
+				name: renderRecurringName(mapping.recurringNameTemplate, name, intervalCount, interval),
+				quantity,
+				currency,
+				recurring: true,
+				unitAmount: cfg.priceUnit === "minor" ? Math.round(priceNum) : toMinorUnits(priceNum, currency),
+				interval,
+				intervalCount
+			});
+			continue;
+		}
+		const priceNum = toNum(data[mapping.priceField]);
+		if (!Number.isFinite(priceNum) || priceNum < 0) return fail("missing_price", `${mapping.collection}/${entry.id}`);
 		const unitAmount = cfg.priceUnit === "minor" ? Math.round(priceNum) : toMinorUnits(priceNum, currency);
 		items.push({
 			collection: mapping.collection,
@@ -747,6 +855,9 @@ async function handleCheckout(routeCtx, ctx) {
 	if (!ctx.content) return fail("content_unavailable");
 	const body = routeCtx.input ?? {};
 	const stripe = getStripe(cfg.secretKey);
+	const trustedResult = await resolveTrusted(cfg, body);
+	if ("error" in trustedResult) return trustedResult;
+	const trusted = trustedResult.trusted;
 	const resolved = await resolveItems(ctx, stripe, cfg, body.items);
 	if ("error" in resolved) return resolved;
 	const items = resolved.items;
@@ -768,21 +879,28 @@ async function handleCheckout(routeCtx, ctx) {
 				name: i.name,
 				...i.description ? { description: i.description } : {},
 				...i.image ? { images: [i.image] } : {}
-			}
+			},
+			...i.recurring && i.interval ? { recurring: {
+				interval: i.interval,
+				interval_count: i.intervalCount ?? 1
+			} } : {}
 		}
 	});
+	const meta = itemsMetadata(items);
+	const clientMetadata = sanitizeMetadata(body.metadata);
 	const metadata = {
 		source: METADATA_SOURCE,
-		...itemsMetadata(items),
-		...sanitizeMetadata(body.metadata)
+		...meta,
+		...clientMetadata
 	};
 	const params = {
 		mode,
 		line_items: lineItems,
 		metadata
 	};
+	if (trusted.customer) params.customer = trusted.customer;
 	const customerEmail = str(body.customerEmail);
-	if (customerEmail && EMAIL_RE.test(customerEmail)) params.customer_email = customerEmail;
+	if (!params.customer && customerEmail && EMAIL_RE.test(customerEmail)) params.customer_email = customerEmail;
 	const clientReference = str(body.clientReference);
 	if (clientReference && /^[\w.-]{1,200}$/.test(clientReference)) params.client_reference_id = clientReference;
 	if (cfg.allowPromotionCodes) params.allow_promotion_codes = true;
@@ -790,6 +908,20 @@ async function handleCheckout(routeCtx, ctx) {
 	if (cfg.collectPhone) params.phone_number_collection = { enabled: true };
 	if (cfg.shippingCountries.length > 0) params.shipping_address_collection = { allowed_countries: cfg.shippingCountries };
 	if (mode === "subscription") params.subscription_data = { metadata };
+	if (mode === "payment") {
+		params.payment_intent_data = {
+			description: meta.emdash_desc,
+			metadata: {
+				...meta,
+				...clientMetadata
+			}
+		};
+		if (cfg.consentPromotions) params.consent_collection = { promotions: "auto" };
+		if (cfg.recoveryEnabled) params.after_expiration = { recovery: {
+			enabled: true,
+			allow_promotion_codes: cfg.allowPromotionCodes
+		} };
+	}
 	const embedded = body.uiMode === "embedded" || body.uiMode === "embedded_page";
 	if (embedded) {
 		params.ui_mode = "embedded_page";
@@ -821,6 +953,9 @@ async function handlePaymentIntent(routeCtx, ctx) {
 	if (!ctx.content) return fail("content_unavailable");
 	const body = routeCtx.input ?? {};
 	const stripe = getStripe(cfg.secretKey);
+	const trustedResult = await resolveTrusted(cfg, body);
+	if ("error" in trustedResult) return trustedResult;
+	const trusted = trustedResult.trusted;
 	const resolved = await resolveItems(ctx, stripe, cfg, body.items);
 	if ("error" in resolved) return resolved;
 	const items = resolved.items;
@@ -841,6 +976,8 @@ async function handlePaymentIntent(routeCtx, ctx) {
 		},
 		automatic_payment_methods: { enabled: true }
 	};
+	if (trusted.customer) params.customer = trusted.customer;
+	if (trusted.setupFutureUsage && trusted.customer) params.setup_future_usage = trusted.setupFutureUsage;
 	const receiptEmail = str(body.receiptEmail);
 	if (receiptEmail && EMAIL_RE.test(receiptEmail)) params.receipt_email = receiptEmail;
 	try {
