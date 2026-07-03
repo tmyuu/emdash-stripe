@@ -70,6 +70,8 @@ export interface AdminMessages {
   forwardUrlPlaceholder: string;
   forwardSecretLabel: string;
   forwardSecretPlaceholder: string;
+  forwardBindingLabel: string;
+  forwardBindingPlaceholder: string;
 
   toastSaved: string;
   toastSaveFailed: string;
@@ -140,6 +142,9 @@ const en: Locale = {
     forwardSecretLabel: "Forwarding secret",
     forwardSecretPlaceholder:
       "Shared secret used to HMAC-sign forwarded events (leave blank to keep the current value)",
+    forwardBindingLabel: "Forward via service binding",
+    forwardBindingPlaceholder:
+      "Service binding name (e.g. SELF) — required when the forward URL is this same Worker, which cannot fetch its own hostname.",
 
     toastSaved: "Settings saved.",
     toastSaveFailed: "Failed to save settings.",
@@ -206,6 +211,9 @@ const ja: Locale = {
     forwardSecretLabel: "転送用シークレット",
     forwardSecretPlaceholder:
       "転送イベントのHMAC署名に使う共有シークレット(空欄なら現在の値を維持)",
+    forwardBindingLabel: "転送に使うService Binding",
+    forwardBindingPlaceholder:
+      "Binding名(例: SELF)。転送先URLがこのWorker自身の場合は必須(Workerは自分のホスト名へfetchできないため)。",
 
     toastSaved: "設定を保存しました。",
     toastSaveFailed: "設定の保存に失敗しました。",

@@ -31,6 +31,7 @@ export const K = {
   ordersCollection: "settings:ordersCollection",
   forwardUrl: "settings:forwardUrl",
   forwardSecret: "settings:forwardSecret",
+  forwardBinding: "settings:forwardBinding",
 } as const;
 
 // --- collection mappings -------------------------------------------------------
@@ -131,6 +132,12 @@ export interface Settings {
   /** URL receiving signed copies of verified webhook events; empty = disabled. */
   forwardUrl: string;
   forwardSecret: string;
+  /**
+   * Service binding name to send forwards through. Required when the forward
+   * URL is the host Worker itself — Cloudflare blocks a Worker from fetching
+   * its own hostname. Empty = global fetch (forwarding to another origin).
+   */
+  forwardBinding: string;
 }
 
 function envStr(name: string): string {
@@ -174,5 +181,6 @@ export async function loadSettings(ctx: PluginContext): Promise<Settings> {
     ordersCollection: (await getStr(ctx, K.ordersCollection)).trim(),
     forwardUrl: (await getStr(ctx, K.forwardUrl)).trim(),
     forwardSecret: await getStr(ctx, K.forwardSecret),
+    forwardBinding: (await getStr(ctx, K.forwardBinding)).trim(),
   };
 }

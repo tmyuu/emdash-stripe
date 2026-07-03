@@ -1,5 +1,5 @@
-import Stripe from "stripe";
 import { env } from "cloudflare:workers";
+import Stripe from "stripe";
 //#region src/stripe.ts
 /**
 * Stripe client + money/signing helpers for emdash-stripe.
@@ -125,6 +125,8 @@ const LOCALES = {
 		forwardUrlPlaceholder: "Optional: https URL that receives verified Stripe events as signed POSTs (X-Emdash-Stripe-Signature).",
 		forwardSecretLabel: "Forwarding secret",
 		forwardSecretPlaceholder: "Shared secret used to HMAC-sign forwarded events (leave blank to keep the current value)",
+		forwardBindingLabel: "Forward via service binding",
+		forwardBindingPlaceholder: "Service binding name (e.g. SELF) — required when the forward URL is this same Worker, which cannot fetch its own hostname.",
 		toastSaved: "Settings saved.",
 		toastSaveFailed: "Failed to save settings.",
 		toastInvalidMappings: "Sellable collections must be a JSON array of {collection: ...} objects.",
@@ -175,6 +177,8 @@ const LOCALES = {
 		forwardUrlPlaceholder: "任意: 検証済みStripeイベントを署名付きPOST(X-Emdash-Stripe-Signature)で受け取るhttps URL。",
 		forwardSecretLabel: "転送用シークレット",
 		forwardSecretPlaceholder: "転送イベントのHMAC署名に使う共有シークレット(空欄なら現在の値を維持)",
+		forwardBindingLabel: "転送に使うService Binding",
+		forwardBindingPlaceholder: "Binding名(例: SELF)。転送先URLがこのWorker自身の場合は必須(Workerは自分のホスト名へfetchできないため)。",
 		toastSaved: "設定を保存しました。",
 		toastSaveFailed: "設定の保存に失敗しました。",
 		toastInvalidMappings: "販売対象コレクションは {collection: ...} オブジェクトのJSON配列で指定してください。",
@@ -210,7 +214,8 @@ const K = {
 	shippingCountries: "settings:shippingCountries",
 	ordersCollection: "settings:ordersCollection",
 	forwardUrl: "settings:forwardUrl",
-	forwardSecret: "settings:forwardSecret"
+	forwardSecret: "settings:forwardSecret",
+	forwardBinding: "settings:forwardBinding"
 };
 const DEFAULT_MAPPINGS = [{
 	collection: "products",
@@ -284,7 +289,8 @@ async function loadSettings(ctx) {
 		shippingCountries: splitCountries(await getStr(ctx, K.shippingCountries)),
 		ordersCollection: (await getStr(ctx, K.ordersCollection)).trim(),
 		forwardUrl: (await getStr(ctx, K.forwardUrl)).trim(),
-		forwardSecret: await getStr(ctx, K.forwardSecret)
+		forwardSecret: await getStr(ctx, K.forwardSecret),
+		forwardBinding: (await getStr(ctx, K.forwardBinding)).trim()
 	};
 }
 //#endregion
@@ -427,6 +433,13 @@ async function buildSettingsPage(ctx) {
 					action_id: "forwardSecret",
 					label: t.forwardSecretLabel,
 					placeholder: t.forwardSecretPlaceholder
+				},
+				{
+					type: "text_input",
+					action_id: "forwardBinding",
+					label: t.forwardBindingLabel,
+					placeholder: t.forwardBindingPlaceholder,
+					initial_value: cfg.forwardBinding
 				}
 			]
 		}
@@ -475,6 +488,7 @@ async function saveSettings(ctx, values) {
 		await setStr(K.shippingCountries, values.shippingCountries);
 		await setStr(K.ordersCollection, values.ordersCollection);
 		await setStr(K.forwardUrl, values.forwardUrl);
+		await setStr(K.forwardBinding, values.forwardBinding);
 		for (const [key, kvKey] of [
 			["allowPromotionCodes", K.allowPromotionCodes],
 			["automaticTax", K.automaticTax],
@@ -947,11 +961,20 @@ async function maybeCreateOrder(ctx, cfg, recordId, record) {
 */
 async function forwardEvent(ctx, cfg, event) {
 	if (!cfg.forwardUrl || !cfg.forwardSecret) return true;
+	let doFetch = fetch;
+	if (cfg.forwardBinding) {
+		const bound = env[cfg.forwardBinding];
+		if (typeof bound?.fetch !== "function") {
+			ctx.log.error(`Forward binding "${cfg.forwardBinding}" is not a service binding on the host Worker — check wrangler.jsonc "services"`);
+			return false;
+		}
+		doFetch = bound.fetch.bind(bound);
+	}
 	try {
 		const body = JSON.stringify(event);
 		const t = Math.floor(Date.now() / 1e3);
 		const signature = await hmacSha256Hex(cfg.forwardSecret, `${t}.${body}`);
-		const res = await fetch(cfg.forwardUrl, {
+		const res = await doFetch(cfg.forwardUrl, {
 			method: "POST",
 			headers: {
 				"content-type": "application/json",
