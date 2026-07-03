@@ -110,7 +110,7 @@ All routes are `POST` with a JSON body, mounted at `/_emdash/api/plugins/stripe/
 Hosted response: `{ "ok": true, "id": "cs_...", "url": "https://checkout.stripe.com/..." }` → redirect the browser to `url`.
 Embedded response: `{ "ok": true, "id": "cs_...", "clientSecret": "cs_..._secret_..." }` → pass to Stripe.js embedded checkout.
 
-`collection` defaults to the first mapping. Promotion codes, automatic tax, phone collection, shipping-address countries, **marketing-consent collection** (`consent_collection.promotions`), and **abandoned-checkout recovery** (`after_expiration.recovery` — recovery URLs arrive on `checkout.session.expired`) are toggled globally on the settings page. In payment mode the item summary and client `metadata` also ride on the PaymentIntent (`payment_intent_data.description` / `.metadata`) so host order records can key off the PI. A `session_id={CHECKOUT_SESSION_ID}` query parameter is appended to the success/return URL.
+`collection` defaults to the first mapping. Promotion codes, automatic tax, phone collection, shipping-address countries, **marketing-consent collection** (`consent_collection.promotions` — a Stripe feature unavailable in some account countries, e.g. Japan; leave the toggle off there or payment-mode session creation fails), and **abandoned-checkout recovery** (`after_expiration.recovery` — recovery URLs arrive on `checkout.session.expired`) are toggled globally on the settings page. In payment mode the item summary and client `metadata` also ride on the PaymentIntent (`payment_intent_data.description` / `.metadata`) so host order records can key off the PI. A `session_id={CHECKOUT_SESSION_ID}` query parameter is appended to the success/return URL.
 
 ```html
 <button id="buy">Buy</button>
