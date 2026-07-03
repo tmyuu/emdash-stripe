@@ -7,6 +7,8 @@
  *                                 (hosted redirect or embedded page).
  *   - `payment-intent` (public) — same resolution, but create a PaymentIntent
  *                                 for custom payment UIs (Payment Element).
+ *   - `subscription`   (public) — create a default_incomplete Subscription for
+ *                                 embedded payment UIs (trusted customer only).
  *   - `session`        (public) — status lookup for success pages.
  *   - `config`         (public) — publishable key + sellable collections, so
  *                                 the site can render buy buttons dynamically.
@@ -45,11 +47,14 @@ import type Stripe from "stripe";
 import { getStripe, toMinorUnits, hmacSha256Hex, verifyTrustedToken } from "./stripe.js";
 import {
   loadSettings,
+  getStr,
+  K,
   asRecurringInterval,
   type CollectionMapping,
   type RecurringInterval,
   type Settings,
 } from "./config.js";
+import { getLocale, normalizeLang, DEFAULT_LANG } from "./i18n.js";
 import { handleAdmin } from "./admin.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -72,7 +77,11 @@ interface TrustedFields {
 
 type TrustedResult = { trusted: TrustedFields } | { ok: false; error: string };
 
-async function resolveTrusted(cfg: Settings, body: Record<string, unknown>): Promise<TrustedResult> {
+/** (exported for tests) */
+export async function resolveTrusted(
+  cfg: Settings,
+  body: Record<string, unknown>,
+): Promise<TrustedResult> {
   if (body.trusted === undefined) return { trusted: {} };
   if (typeof body.trusted !== "string") return fail("invalid_trusted");
   if (!cfg.forwardSecret) return fail("trusted_not_configured");
@@ -121,8 +130,8 @@ function urlBase(ctx: PluginContext, routeCtx: SandboxedRouteContext): string {
   return ctx.site.url || new URL(routeCtx.request.url).origin;
 }
 
-/** Client-supplied metadata: string→string, capped, reserved keys stripped. */
-function sanitizeMetadata(v: unknown): Record<string, string> {
+/** Client-supplied metadata: string→string, capped, reserved keys stripped. (exported for tests) */
+export function sanitizeMetadata(v: unknown): Record<string, string> {
   const out: Record<string, string> = {};
   if (!v || typeof v !== "object") return out;
   let n = 0;
@@ -190,8 +199,8 @@ function toNum(v: unknown): number {
   return typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
 }
 
-/** Display name for a recurring line item from the mapping's template. */
-function renderRecurringName(
+/** Display name for a recurring line item from the mapping's template. (exported for tests) */
+export function renderRecurringName(
   template: string | undefined,
   name: string,
   count: number,
@@ -337,8 +346,8 @@ async function resolveItems(
   return { items };
 }
 
-/** Compact metadata describing what was bought, for webhooks and host apps. */
-function itemsMetadata(items: ResolvedItem[]): { emdash_items: string; emdash_desc: string } {
+/** Compact metadata describing what was bought, for webhooks and host apps. (exported for tests) */
+export function itemsMetadata(items: ResolvedItem[]): { emdash_items: string; emdash_desc: string } {
   let json = JSON.stringify(items.map((i) => ({ c: i.collection, id: i.entryId, q: i.quantity })));
   if (json.length > 500) {
     json = JSON.stringify(items.map((i) => ({ id: i.entryId, q: i.quantity })));
@@ -441,6 +450,10 @@ async function handleCheckout(routeCtx: SandboxedRouteContext, ctx: PluginContex
     }
   }
 
+  // Stripe Checkout localizes by browser by default; a Japanese-language
+  // plugin pins the payment page to Japanese for brand consistency.
+  if (cfg.lang === "ja") params.locale = "ja";
+
   // Stripe requires absolute URLs (see urlBase for base resolution).
   const embedded = body.uiMode === "embedded" || body.uiMode === "embedded_page";
   if (embedded) {
@@ -458,8 +471,14 @@ async function handleCheckout(routeCtx: SandboxedRouteContext, ctx: PluginContex
       ? { ok: true, id: session.id, clientSecret: session.client_secret }
       : { ok: true, id: session.id, url: session.url };
   } catch (err) {
+    const message = (err as Error).message ?? "";
     ctx.log.error("Failed to create checkout session", err as Error);
-    return fail("stripe_error", (err as Error).message);
+    // Stripe restricts consent_collection.promotions by account country
+    // (e.g. unavailable for Japan accounts) — surface it actionably.
+    if (params.consent_collection && /consent_collection/.test(message)) {
+      return fail("consent_country_unsupported", message);
+    }
+    return fail("stripe_error", message);
   }
 }
 
@@ -508,6 +527,92 @@ async function handlePaymentIntent(routeCtx: SandboxedRouteContext, ctx: PluginC
     return { ok: true, id: pi.id, clientSecret: pi.client_secret, amount, currency };
   } catch (err) {
     ctx.log.error("Failed to create payment intent", err as Error);
+    return fail("stripe_error", (err as Error).message);
+  }
+}
+
+// --- subscription (custom payment UIs / Payment Element) --------------------------
+/**
+ * Create a Subscription for an embedded payment UI: `default_incomplete` +
+ * `save_default_payment_method: on_subscription`, returning the first
+ * invoice's confirmation client secret for Payment Element to confirm.
+ *
+ * A subscription always belongs to a customer, so the trusted `customer`
+ * field is required — this route cannot be driven by an anonymous caller.
+ * price_data items are materialized as reusable Stripe Prices keyed by a
+ * deterministic lookup_key (subscriptions.create has no product_data-inline
+ * price form).
+ */
+async function handleSubscription(routeCtx: SandboxedRouteContext, ctx: PluginContext) {
+  const cfg = await loadSettings(ctx);
+  if (!cfg.secretKey) return fail("not_configured");
+  if (!ctx.content) return fail("content_unavailable");
+  const body = (routeCtx.input ?? {}) as Record<string, unknown>;
+  const stripe = getStripe(cfg.secretKey);
+
+  const trustedResult = await resolveTrusted(cfg, body);
+  if ("error" in trustedResult) return trustedResult;
+  const trusted = trustedResult.trusted;
+  if (!trusted.customer) return fail("customer_required");
+
+  // Items may omit `recurring: true` here — the route itself implies it.
+  const withRecurring = Array.isArray(body.items)
+    ? (body.items as Record<string, unknown>[]).map((i) =>
+        i && typeof i === "object" ? { recurring: true, ...i } : i,
+      )
+    : body.items;
+  const resolved = await resolveItems(ctx, stripe, cfg, urlBase(ctx, routeCtx), withRecurring);
+  if ("error" in resolved) return resolved;
+  const items = resolved.items;
+  if (items.some((i) => !i.recurring)) return fail("recurring_required");
+
+  const subItems: Stripe.SubscriptionCreateParams.Item[] = [];
+  for (const i of items) {
+    if (i.priceId) {
+      subItems.push({ price: i.priceId, quantity: i.quantity });
+      continue;
+    }
+    // Reuse one Price per (entry, amount, cadence); price changes in the CMS
+    // mint a new lookup_key, so existing subscriptions keep their old Price.
+    const lookupKey = `emdash_${i.collection}_${i.entryId}_${i.unitAmount}_${i.interval}_${i.intervalCount}`;
+    let priceId: string | undefined;
+    try {
+      const found = await stripe.prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 });
+      priceId = found.data[0]?.id;
+      if (!priceId) {
+        const price = await stripe.prices.create({
+          currency: i.currency,
+          unit_amount: i.unitAmount!,
+          recurring: { interval: i.interval!, interval_count: i.intervalCount ?? 1 },
+          product_data: { name: i.name },
+          lookup_key: lookupKey,
+        });
+        priceId = price.id;
+      }
+    } catch (err) {
+      ctx.log.error(`Failed to resolve a recurring price for ${lookupKey}`, err as Error);
+      return fail("price_lookup_failed", lookupKey);
+    }
+    subItems.push({ price: priceId, quantity: i.quantity });
+  }
+
+  const meta = itemsMetadata(items);
+  const metadata = { source: METADATA_SOURCE, ...meta, ...sanitizeMetadata(body.metadata) };
+  try {
+    const sub = await stripe.subscriptions.create({
+      customer: trusted.customer,
+      items: subItems,
+      payment_behavior: "default_incomplete",
+      payment_settings: { save_default_payment_method: "on_subscription" },
+      expand: ["latest_invoice.confirmation_secret"],
+      metadata,
+    });
+    const invoice = sub.latest_invoice as Stripe.Invoice | null;
+    const clientSecret = invoice?.confirmation_secret?.client_secret ?? null;
+    if (!clientSecret) return fail("stripe_error", "no confirmation secret on the first invoice");
+    return { ok: true, id: sub.id, clientSecret, status: sub.status };
+  } catch (err) {
+    ctx.log.error("Failed to create subscription", err as Error);
     return fail("stripe_error", (err as Error).message);
   }
 }
@@ -874,11 +979,35 @@ async function handleWebhook(routeCtx: SandboxedRouteContext, ctx: PluginContext
   return { received: true, type: event.type };
 }
 
+/**
+ * Attach a localized human-readable `message` (from the Language setting) to
+ * failure responses. The machine `error` code is the stable contract; the
+ * message saves hosts from maintaining their own code→copy table. The webhook
+ * route stays unwrapped — its consumer is Stripe, not a person.
+ */
+function localized(
+  handler: (routeCtx: SandboxedRouteContext, ctx: PluginContext) => Promise<unknown>,
+) {
+  return async (routeCtx: SandboxedRouteContext, ctx: PluginContext): Promise<unknown> => {
+    const result = await handler(routeCtx, ctx);
+    if (result && typeof result === "object" && (result as { ok?: unknown }).ok === false) {
+      const code = (result as { error?: unknown }).error;
+      if (typeof code === "string") {
+        const errors = getLocale(normalizeLang(await getStr(ctx, K.language, DEFAULT_LANG))).errors;
+        const table: Record<string, string> = { ...errors };
+        return { ...result, message: table[code] ?? errors.default };
+      }
+    }
+    return result;
+  };
+}
+
 export default {
   routes: {
-    checkout: { public: true, handler: handleCheckout },
-    "payment-intent": { public: true, handler: handlePaymentIntent },
-    session: { public: true, handler: handleSession },
+    checkout: { public: true, handler: localized(handleCheckout) },
+    "payment-intent": { public: true, handler: localized(handlePaymentIntent) },
+    subscription: { public: true, handler: localized(handleSubscription) },
+    session: { public: true, handler: localized(handleSession) },
     config: { public: true, handler: handleConfig },
     webhook: { public: true, handler: handleWebhook },
     admin: { handler: handleAdmin },

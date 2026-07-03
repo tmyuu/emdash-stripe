@@ -7,8 +7,9 @@
  * to `LOCALES` (and to `LANGS`).
  *
  * The active language is a runtime setting (admin settings page → "Language")
- * stored in the plugin KV. It only affects the admin UI: the customer-facing
- * payment UI is Stripe Checkout itself, which localizes independently.
+ * stored in the plugin KV. It drives the admin UI, the `message` field on
+ * route error responses (machine `error` codes stay stable), and — for `ja` —
+ * pins the Stripe Checkout session locale.
  */
 
 export type Lang = "en" | "ja";
@@ -91,8 +92,39 @@ export interface AdminMessages {
   colDescription: string;
 }
 
+/**
+ * Human-readable messages for route error codes, attached as `message` next
+ * to the stable machine `error` code on failure responses. Keys mirror the
+ * codes produced by the route handlers; `default` covers anything unmapped.
+ */
+export interface ErrorMessages {
+  default: string;
+  not_configured: string;
+  content_unavailable: string;
+  invalid_items: string;
+  unknown_collection: string;
+  unknown_item: string;
+  missing_price: string;
+  not_recurring: string;
+  recurring_required: string;
+  mixed_currencies: string;
+  price_lookup_failed: string;
+  inactive_price: string;
+  recurring_requires_subscription: string;
+  recurring_not_supported: string;
+  unsupported_price: string;
+  invalid_amount: string;
+  invalid_trusted: string;
+  trusted_not_configured: string;
+  customer_required: string;
+  consent_country_unsupported: string;
+  invalid_session_id: string;
+  stripe_error: string;
+}
+
 export interface Locale {
   admin: AdminMessages;
+  errors: ErrorMessages;
 }
 
 // --- locales -----------------------------------------------------------------
@@ -132,7 +164,8 @@ const en: Locale = {
     allowPromotionCodesLabel: "Allow promotion codes at checkout",
     automaticTaxLabel: "Automatic tax (requires Stripe Tax)",
     collectPhoneLabel: "Collect phone number at checkout",
-    consentPromotionsLabel: "Ask for marketing-email consent at checkout (for recovery emails)",
+    consentPromotionsLabel:
+      "Ask for marketing-email consent at checkout (for recovery emails — unavailable in some Stripe account countries, e.g. Japan)",
     recoveryEnabledLabel: "Keep expired checkouts recoverable (abandoned-cart recovery URL)",
     shippingCountriesLabel: "Shipping countries",
     shippingCountriesPlaceholder:
@@ -164,6 +197,31 @@ const en: Locale = {
     colAmount: "Amount",
     colEmail: "Email",
     colDescription: "Description",
+  },
+  errors: {
+    default: "The payment request failed. Please try again shortly.",
+    not_configured: "Payments are not set up yet (missing Stripe secret key).",
+    content_unavailable: "Product data is unavailable right now. Please try again shortly.",
+    invalid_items: "The item list is invalid.",
+    unknown_collection: "This collection is not sellable.",
+    unknown_item: "Product not found.",
+    missing_price: "This product has no valid price.",
+    not_recurring: "This product is not available as a subscription.",
+    recurring_required: "This endpoint only accepts subscription items.",
+    mixed_currencies: "Items in different currencies cannot be purchased together.",
+    price_lookup_failed: "The Stripe price could not be retrieved.",
+    inactive_price: "The Stripe price for this product is inactive.",
+    recurring_requires_subscription: "Subscription items require subscription mode.",
+    recurring_not_supported: "Subscriptions are not supported by this endpoint.",
+    unsupported_price: "This price type cannot be used here.",
+    invalid_amount: "The total amount is invalid.",
+    invalid_trusted: "The trusted request token is invalid or expired.",
+    trusted_not_configured: "Trusted requests are not configured (missing shared secret).",
+    customer_required: "This request requires a customer (trusted token).",
+    consent_country_unsupported:
+      "Marketing-consent collection is not available for this Stripe account's country. Turn the consent setting off.",
+    invalid_session_id: "The checkout session ID is invalid.",
+    stripe_error: "Stripe rejected the request. Please try again shortly.",
   },
 };
 
@@ -203,7 +261,8 @@ const ja: Locale = {
     allowPromotionCodesLabel: "チェックアウトでプロモーションコードを許可",
     automaticTaxLabel: "自動税計算(Stripe Taxが必要)",
     collectPhoneLabel: "チェックアウトで電話番号を収集",
-    consentPromotionsLabel: "チェックアウトで販促メールの同意を収集(カゴ落ち回収メール用)",
+    consentPromotionsLabel:
+      "チェックアウトで販促メールの同意を収集(カゴ落ち回収メール用)※日本のStripeアカウントでは利用不可",
     recoveryEnabledLabel: "期限切れチェックアウトを復元可能にする(カゴ落ち復元URL)",
     shippingCountriesLabel: "配送先の国",
     shippingCountriesPlaceholder:
@@ -235,6 +294,31 @@ const ja: Locale = {
     colAmount: "金額",
     colEmail: "メール",
     colDescription: "内容",
+  },
+  errors: {
+    default: "決済の開始に失敗しました。時間をおいてお試しください。",
+    not_configured: "決済の準備ができていません(Stripeシークレットキー未設定)。",
+    content_unavailable: "商品情報を取得できませんでした。時間をおいてお試しください。",
+    invalid_items: "商品の指定が正しくありません。",
+    unknown_collection: "このコレクションは販売対象ではありません。",
+    unknown_item: "商品が見つかりません。",
+    missing_price: "この商品に有効な価格が設定されていません。",
+    not_recurring: "この商品は定期便に対応していません。",
+    recurring_required: "この操作は定期便商品にのみ使えます。",
+    mixed_currencies: "通貨の異なる商品は同時に購入できません。",
+    price_lookup_failed: "Stripeの価格情報を取得できませんでした。",
+    inactive_price: "この商品のStripe価格が無効になっています。",
+    recurring_requires_subscription: "定期便商品はサブスクリプションモードでのみ購入できます。",
+    recurring_not_supported: "この操作では定期便を扱えません。",
+    unsupported_price: "この価格タイプはここでは使用できません。",
+    invalid_amount: "合計金額が正しくありません。",
+    invalid_trusted: "信頼済みリクエストのトークンが不正か期限切れです。",
+    trusted_not_configured: "信頼済みリクエストが未設定です(共有シークレットがありません)。",
+    customer_required: "この操作には顧客情報(trustedトークン)が必要です。",
+    consent_country_unsupported:
+      "このStripeアカウントの国では販促同意の収集を利用できません。同意収集の設定をオフにしてください。",
+    invalid_session_id: "チェックアウトセッションIDが正しくありません。",
+    stripe_error: "Stripeがリクエストを受け付けませんでした。時間をおいてお試しください。",
   },
 };
 

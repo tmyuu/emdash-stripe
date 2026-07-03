@@ -1,4 +1,3 @@
-import Stripe from "stripe";
 import { PluginContext, SandboxedRouteContext } from "emdash/plugin";
 
 //#region src/i18n.d.ts
@@ -11,10 +10,85 @@ import { PluginContext, SandboxedRouteContext } from "emdash/plugin";
  * to `LOCALES` (and to `LANGS`).
  *
  * The active language is a runtime setting (admin settings page → "Language")
- * stored in the plugin KV. It only affects the admin UI: the customer-facing
- * payment UI is Stripe Checkout itself, which localizes independently.
+ * stored in the plugin KV. It drives the admin UI, the `message` field on
+ * route error responses (machine `error` codes stay stable), and — for `ja` —
+ * pins the Stripe Checkout session locale.
  */
 type Lang = "en" | "ja";
+//#endregion
+//#region src/config.d.ts
+/**
+ * Declares one EmDash collection as sellable and maps its fields. Every field
+ * except `collection` has a sensible default; a bare `{"collection": "x"}` is
+ * a valid mapping.
+ *
+ * Per entry, `priceIdField` (a Stripe Price ID, `price_...`) wins over
+ * `priceField` (a number charged via inline `price_data`). Stripe Prices are
+ * the path to subscriptions; numeric prices keep the CMS as the single source
+ * of truth with zero Stripe catalog management.
+ */
+interface CollectionMapping {
+  collection: string;
+  /** Field holding a numeric price. Default: "price". */
+  priceField: string;
+  /** Field holding a Stripe Price ID. Default: "stripePriceId". */
+  priceIdField: string;
+  /** Field holding the display name. Default: "name" (falls back to "title", slug, id). */
+  nameField: string;
+  /** Optional field holding a short description passed to Stripe. */
+  descriptionField?: string;
+  /** Optional field holding an image (absolute URL, site-relative path, or media object with `url`). */
+  imageField?: string;
+  /** Optional field holding a per-entry ISO currency code overriding the default. */
+  currencyField?: string;
+  /** Optional gate: when set, the entry's value here must be truthy to sell as recurring. */
+  recurringEnabledField?: string;
+  /** Field holding the recurring price. Falls back to `priceField`. */
+  recurringPriceField?: string;
+  /** Field holding the billing interval ("day"|"week"|"month"|"year"). */
+  recurringIntervalField?: string;
+  /** Fixed billing interval when no field is set. Default: "month". */
+  recurringInterval?: RecurringInterval;
+  /** Field holding the interval count (e.g. 4 = every 4 months). */
+  recurringIntervalCountField?: string;
+  /** Fixed interval count when no field is set. Default: 1. */
+  recurringIntervalCount?: number;
+  /** Display-name template for recurring line items: `{name}`, `{count}`, `{interval}`. Default: `{name}`. */
+  recurringNameTemplate?: string;
+}
+type RecurringInterval = "day" | "week" | "month" | "year";
+interface Settings {
+  lang: Lang;
+  secretKey: string;
+  publishableKey: string;
+  /** Default ISO currency code (lowercase), e.g. "usd". */
+  currency: string;
+  /** How numeric price fields are interpreted. */
+  priceUnit: "major" | "minor";
+  mappings: CollectionMapping[];
+  successPath: string;
+  cancelPath: string;
+  allowPromotionCodes: boolean;
+  automaticTax: boolean;
+  collectPhone: boolean;
+  /** Ask for marketing-email consent on hosted checkout (consent_collection.promotions). */
+  consentPromotions: boolean;
+  /** Keep expired hosted checkouts recoverable (after_expiration.recovery). */
+  recoveryEnabled: boolean;
+  /** Two-letter ISO country codes; empty = don't collect a shipping address. */
+  shippingCountries: string[];
+  /** Collection slug for order entries on successful payment; empty = disabled. */
+  ordersCollection: string;
+  /** URL receiving signed copies of verified webhook events; empty = disabled. */
+  forwardUrl: string;
+  forwardSecret: string;
+  /**
+   * Service binding name to send forwards through. Required when the forward
+   * URL is the host Worker itself — Cloudflare blocks a Worker from fetching
+   * its own hostname. Empty = global fetch (forwarding to another origin).
+   */
+  forwardBinding: string;
+}
 //#endregion
 //#region src/admin.d.ts
 declare function handleAdmin(routeCtx: SandboxedRouteContext, ctx: PluginContext): Promise<{
@@ -107,45 +181,49 @@ declare function handleAdmin(routeCtx: SandboxedRouteContext, ctx: PluginContext
 }>;
 //#endregion
 //#region src/sandbox-entry.d.ts
-declare function handleCheckout(routeCtx: SandboxedRouteContext, ctx: PluginContext): Promise<{
+/**
+ * Fields only the host application may set (they act on someone's Stripe
+ * Customer), carried as a `trusted` token the host signs with the shared
+ * forwarding secret. A public caller cannot mint one.
+ */
+interface TrustedFields {
+  customer?: string;
+  setupFutureUsage?: "on_session" | "off_session";
+}
+type TrustedResult = {
+  trusted: TrustedFields;
+} | {
   ok: false;
   error: string;
-} | {
-  ok: boolean;
-  id: string;
-  clientSecret: string | null;
-  url?: undefined;
-} | {
-  ok: boolean;
-  id: string;
-  url: string | null;
-  clientSecret?: undefined;
-}>;
-declare function handlePaymentIntent(routeCtx: SandboxedRouteContext, ctx: PluginContext): Promise<{
-  ok: false;
-  error: string;
-} | {
-  ok: boolean;
-  id: string;
-  clientSecret: string | null;
-  amount: number;
+};
+/** (exported for tests) */
+declare function resolveTrusted(cfg: Settings, body: Record<string, unknown>): Promise<TrustedResult>;
+/** Client-supplied metadata: string→string, capped, reserved keys stripped. (exported for tests) */
+declare function sanitizeMetadata(v: unknown): Record<string, string>;
+interface ResolvedItem {
+  collection: string;
+  entryId: string;
+  name: string;
+  quantity: number;
   currency: string;
-}>;
-declare function handleSession(routeCtx: SandboxedRouteContext, ctx: PluginContext): Promise<{
-  ok: false;
-  error: string;
-  detail?: string;
-} | {
-  ok: boolean;
-  id: string;
-  status: Stripe.Checkout.Session.Status | null;
-  paymentStatus: Stripe.Checkout.Session.PaymentStatus;
-  mode: Stripe.Checkout.Session.Mode;
-  amountTotal: number | null;
-  currency: string | null;
-  customerEmail: string | null;
-  clientReferenceId: string | null;
-}>;
+  recurring: boolean;
+  /** Stripe Price ID path (wins over price_data). */
+  priceId?: string;
+  /** Minor units. Set for price_data items and for retrieved fixed-amount Prices. */
+  unitAmount: number | null;
+  /** Billing cadence for recurring price_data items. */
+  interval?: RecurringInterval;
+  intervalCount?: number;
+  description?: string;
+  image?: string;
+}
+/** Display name for a recurring line item from the mapping's template. (exported for tests) */
+declare function renderRecurringName(template: string | undefined, name: string, count: number, interval: RecurringInterval): string;
+/** Compact metadata describing what was bought, for webhooks and host apps. (exported for tests) */
+declare function itemsMetadata(items: ResolvedItem[]): {
+  emdash_items: string;
+  emdash_desc: string;
+};
 declare function handleConfig(_routeCtx: SandboxedRouteContext, ctx: PluginContext): Promise<{
   ok: boolean;
   publishableKey: string;
@@ -193,15 +271,19 @@ declare const _default: {
   routes: {
     checkout: {
       public: true;
-      handler: typeof handleCheckout;
+      handler: (routeCtx: SandboxedRouteContext, ctx: PluginContext) => Promise<unknown>;
     };
     "payment-intent": {
       public: true;
-      handler: typeof handlePaymentIntent;
+      handler: (routeCtx: SandboxedRouteContext, ctx: PluginContext) => Promise<unknown>;
+    };
+    subscription: {
+      public: true;
+      handler: (routeCtx: SandboxedRouteContext, ctx: PluginContext) => Promise<unknown>;
     };
     session: {
       public: true;
-      handler: typeof handleSession;
+      handler: (routeCtx: SandboxedRouteContext, ctx: PluginContext) => Promise<unknown>;
     };
     config: {
       public: true;
@@ -217,4 +299,4 @@ declare const _default: {
   };
 };
 //#endregion
-export { PaymentRecord, _default as default };
+export { PaymentRecord, _default as default, itemsMetadata, renderRecurringName, resolveTrusted, sanitizeMetadata };
