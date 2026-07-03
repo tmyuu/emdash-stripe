@@ -180,6 +180,20 @@ response or an unreachable endpoint means Stripe redelivers the event later
 and the plugin re-forwards it. Make your handler idempotent (key on
 `event.id`) and return non-2xx when your fulfillment fails.
 
+**Forwarding to the host Worker itself** (the usual case — the plugin runs
+in-process in your site, and the fulfillment route lives on the same Worker):
+Cloudflare blocks a Worker from fetching its own hostname (the subrequest
+dies with HTTP 522), so plain `fetch` can never reach the URL. Add a service
+binding pointing at the Worker itself and set **Forward via service binding**
+to its name:
+
+```jsonc
+// wrangler.jsonc
+"services": [{ "binding": "SELF", "service": "<your-worker-name>" }]
+```
+
+Leave the setting blank when forwarding to a different origin.
+
 ## Subscriptions
 
 Give an entry a Stripe Price ID (`priceIdField`) pointing at a **recurring** Price; `checkout` auto-switches to subscription mode (or pass `"mode": "subscription"`). Subscription lifecycle and invoice events are recorded, and session metadata is propagated to the Subscription so events trace back to CMS entries. Recurring `price_data` (CMS-defined intervals) is not supported in v1 — Stripe-managed Prices are the right tool there.

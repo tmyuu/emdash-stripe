@@ -64,6 +64,7 @@ async function buildSettingsPage(ctx: PluginContext) {
           { type: "text_input", action_id: "ordersCollection", label: t.ordersCollectionLabel, placeholder: t.ordersCollectionPlaceholder, initial_value: cfg.ordersCollection },
           { type: "text_input", action_id: "forwardUrl", label: t.forwardUrlLabel, placeholder: t.forwardUrlPlaceholder, initial_value: cfg.forwardUrl },
           { type: "secret_input", action_id: "forwardSecret", label: t.forwardSecretLabel, placeholder: t.forwardSecretPlaceholder },
+          { type: "text_input", action_id: "forwardBinding", label: t.forwardBindingLabel, placeholder: t.forwardBindingPlaceholder, initial_value: cfg.forwardBinding },
         ],
       },
     ],
@@ -106,6 +107,7 @@ async function saveSettings(ctx: PluginContext, values: Record<string, unknown>)
     await setStr(K.shippingCountries, values.shippingCountries);
     await setStr(K.ordersCollection, values.ordersCollection);
     await setStr(K.forwardUrl, values.forwardUrl);
+    await setStr(K.forwardBinding, values.forwardBinding);
     // toggles → "1" / absent
     for (const [key, kvKey] of [
       ["allowPromotionCodes", K.allowPromotionCodes],

@@ -40,6 +40,7 @@ import type {
   SandboxedPlugin,
   SandboxedRouteContext,
 } from "emdash/plugin";
+import { env as cfEnv } from "cloudflare:workers";
 import type Stripe from "stripe";
 import { getStripe, toMinorUnits, hmacSha256Hex } from "./stripe.js";
 import { loadSettings, type CollectionMapping, type Settings } from "./config.js";
@@ -506,11 +507,27 @@ async function maybeCreateOrder(
  */
 async function forwardEvent(ctx: PluginContext, cfg: Settings, event: Stripe.Event): Promise<boolean> {
   if (!cfg.forwardUrl || !cfg.forwardSecret) return true;
+  // Cloudflare blocks a Worker from fetching its own hostname, and the usual
+  // forward target is a route on the host Worker itself — a self service
+  // binding (the forwardBinding setting) is the loopback path in that case.
+  let doFetch = fetch;
+  if (cfg.forwardBinding) {
+    const bound = (cfEnv as unknown as Record<string, unknown>)[cfg.forwardBinding] as
+      | { fetch?: typeof fetch }
+      | undefined;
+    if (typeof bound?.fetch !== "function") {
+      ctx.log.error(
+        `Forward binding "${cfg.forwardBinding}" is not a service binding on the host Worker — check wrangler.jsonc "services"`,
+      );
+      return false;
+    }
+    doFetch = bound.fetch.bind(bound) as typeof fetch;
+  }
   try {
     const body = JSON.stringify(event);
     const t = Math.floor(Date.now() / 1000);
     const signature = await hmacSha256Hex(cfg.forwardSecret, `${t}.${body}`);
-    const res = await fetch(cfg.forwardUrl, {
+    const res = await doFetch(cfg.forwardUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",
