@@ -60,6 +60,8 @@ async function buildSettingsPage(ctx: PluginContext) {
           { type: "toggle", action_id: "allowPromotionCodes", label: t.allowPromotionCodesLabel, initial_value: cfg.allowPromotionCodes },
           { type: "toggle", action_id: "automaticTax", label: t.automaticTaxLabel, initial_value: cfg.automaticTax },
           { type: "toggle", action_id: "collectPhone", label: t.collectPhoneLabel, initial_value: cfg.collectPhone },
+          { type: "toggle", action_id: "consentPromotions", label: t.consentPromotionsLabel, initial_value: cfg.consentPromotions },
+          { type: "toggle", action_id: "recoveryEnabled", label: t.recoveryEnabledLabel, initial_value: cfg.recoveryEnabled },
           { type: "text_input", action_id: "shippingCountries", label: t.shippingCountriesLabel, placeholder: t.shippingCountriesPlaceholder, initial_value: cfg.shippingCountries.join(", ") },
           { type: "text_input", action_id: "ordersCollection", label: t.ordersCollectionLabel, placeholder: t.ordersCollectionPlaceholder, initial_value: cfg.ordersCollection },
           { type: "text_input", action_id: "forwardUrl", label: t.forwardUrlLabel, placeholder: t.forwardUrlPlaceholder, initial_value: cfg.forwardUrl },
@@ -113,6 +115,8 @@ async function saveSettings(ctx: PluginContext, values: Record<string, unknown>)
       ["allowPromotionCodes", K.allowPromotionCodes],
       ["automaticTax", K.automaticTax],
       ["collectPhone", K.collectPhone],
+      ["consentPromotions", K.consentPromotions],
+      ["recoveryEnabled", K.recoveryEnabled],
     ] as const) {
       if (values[key] === true) await ctx.kv.set(kvKey, "1");
       else await ctx.kv.delete(kvKey);

@@ -27,6 +27,8 @@ export const K = {
   allowPromotionCodes: "settings:allowPromotionCodes",
   automaticTax: "settings:automaticTax",
   collectPhone: "settings:collectPhone",
+  consentPromotions: "settings:consentPromotions",
+  recoveryEnabled: "settings:recoveryEnabled",
   shippingCountries: "settings:shippingCountries",
   ordersCollection: "settings:ordersCollection",
   forwardUrl: "settings:forwardUrl",
@@ -59,6 +61,31 @@ export interface CollectionMapping {
   imageField?: string;
   /** Optional field holding a per-entry ISO currency code overriding the default. */
   currencyField?: string;
+
+  // Recurring (subscription) selling via inline `price_data.recurring` — used
+  // when a request item asks for `"recurring": true`. All optional: without
+  // them, an item can only recur through a Stripe Price ID (`priceIdField`).
+  /** Optional gate: when set, the entry's value here must be truthy to sell as recurring. */
+  recurringEnabledField?: string;
+  /** Field holding the recurring price. Falls back to `priceField`. */
+  recurringPriceField?: string;
+  /** Field holding the billing interval ("day"|"week"|"month"|"year"). */
+  recurringIntervalField?: string;
+  /** Fixed billing interval when no field is set. Default: "month". */
+  recurringInterval?: RecurringInterval;
+  /** Field holding the interval count (e.g. 4 = every 4 months). */
+  recurringIntervalCountField?: string;
+  /** Fixed interval count when no field is set. Default: 1. */
+  recurringIntervalCount?: number;
+  /** Display-name template for recurring line items: `{name}`, `{count}`, `{interval}`. Default: `{name}`. */
+  recurringNameTemplate?: string;
+}
+
+export type RecurringInterval = "day" | "week" | "month" | "year";
+const RECURRING_INTERVALS: readonly string[] = ["day", "week", "month", "year"];
+
+export function asRecurringInterval(v: unknown): RecurringInterval | undefined {
+  return typeof v === "string" && RECURRING_INTERVALS.includes(v) ? (v as RecurringInterval) : undefined;
 }
 
 export const DEFAULT_MAPPINGS: CollectionMapping[] = [
@@ -78,6 +105,7 @@ export function parseMappings(raw: string): CollectionMapping[] {
       }
       const str = (v: unknown): string | undefined =>
         typeof v === "string" && v.trim() ? v.trim() : undefined;
+      const count = typeof m.recurringIntervalCount === "number" ? m.recurringIntervalCount : NaN;
       mappings.push({
         collection: m.collection,
         priceField: str(m.priceField) ?? "price",
@@ -86,6 +114,13 @@ export function parseMappings(raw: string): CollectionMapping[] {
         descriptionField: str(m.descriptionField),
         imageField: str(m.imageField),
         currencyField: str(m.currencyField),
+        recurringEnabledField: str(m.recurringEnabledField),
+        recurringPriceField: str(m.recurringPriceField),
+        recurringIntervalField: str(m.recurringIntervalField),
+        recurringInterval: asRecurringInterval(m.recurringInterval),
+        recurringIntervalCountField: str(m.recurringIntervalCountField),
+        recurringIntervalCount: Number.isInteger(count) && count >= 1 ? count : undefined,
+        recurringNameTemplate: str(m.recurringNameTemplate),
       });
     }
     return mappings;
@@ -125,6 +160,10 @@ export interface Settings {
   allowPromotionCodes: boolean;
   automaticTax: boolean;
   collectPhone: boolean;
+  /** Ask for marketing-email consent on hosted checkout (consent_collection.promotions). */
+  consentPromotions: boolean;
+  /** Keep expired hosted checkouts recoverable (after_expiration.recovery). */
+  recoveryEnabled: boolean;
   /** Two-letter ISO country codes; empty = don't collect a shipping address. */
   shippingCountries: string[];
   /** Collection slug for order entries on successful payment; empty = disabled. */
@@ -177,6 +216,8 @@ export async function loadSettings(ctx: PluginContext): Promise<Settings> {
     allowPromotionCodes: (await getStr(ctx, K.allowPromotionCodes)) === "1",
     automaticTax: (await getStr(ctx, K.automaticTax)) === "1",
     collectPhone: (await getStr(ctx, K.collectPhone)) === "1",
+    consentPromotions: (await getStr(ctx, K.consentPromotions)) === "1",
+    recoveryEnabled: (await getStr(ctx, K.recoveryEnabled)) === "1",
     shippingCountries: splitCountries(await getStr(ctx, K.shippingCountries)),
     ordersCollection: (await getStr(ctx, K.ordersCollection)).trim(),
     forwardUrl: (await getStr(ctx, K.forwardUrl)).trim(),

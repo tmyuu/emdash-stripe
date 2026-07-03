@@ -110,7 +110,6 @@ declare function handleAdmin(routeCtx: SandboxedRouteContext, ctx: PluginContext
 declare function handleCheckout(routeCtx: SandboxedRouteContext, ctx: PluginContext): Promise<{
   ok: false;
   error: string;
-  detail?: string;
 } | {
   ok: boolean;
   id: string;
@@ -125,7 +124,6 @@ declare function handleCheckout(routeCtx: SandboxedRouteContext, ctx: PluginCont
 declare function handlePaymentIntent(routeCtx: SandboxedRouteContext, ctx: PluginContext): Promise<{
   ok: false;
   error: string;
-  detail?: string;
 } | {
   ok: boolean;
   id: string;
