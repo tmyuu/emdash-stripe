@@ -58,7 +58,7 @@ import type { PluginDescriptor } from "emdash";
 export function stripePayments(): PluginDescriptor {
   return {
     id: "stripe",
-    version: "0.1.0",
+    version: "0.2.0",
     format: "standard",
     entrypoint: "emdash-stripe/sandbox",
     // content:read — resolve sellable entries (names/prices) server-side.
