@@ -1,0 +1,11 @@
+node_modules/
+.DS_Store
+*.log
+.env
+.env.local
+*.tsbuildinfo
+
+# NOTE: dist/ is intentionally committed so the package works when installed
+# straight from GitHub (`pnpm add github:tmyuu/emdash-stripe`).
+# A `prepare` script rebuilds it on git installs where lifecycle scripts run;
+# the committed copy is the fallback for environments that block them.

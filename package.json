@@ -1,0 +1,67 @@
+{
+  "name": "emdash-stripe",
+  "version": "0.1.0",
+  "description": "EmDash CMS plugin: Stripe payments for content entries. Hosted/embedded Checkout, Payment Intents, subscriptions via Stripe Prices, signature-verified webhooks, payment records, optional CMS order entries and event forwarding. CMS entries are the source of truth for what is sellable.",
+  "type": "module",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    },
+    "./sandbox": {
+      "import": "./dist/sandbox-entry.mjs",
+      "types": "./dist/sandbox-entry.d.mts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown src/index.ts src/sandbox-entry.ts --format esm --dts --clean",
+    "dev": "tsdown src/index.ts src/sandbox-entry.ts --format esm --dts --watch",
+    "typecheck": "tsc --noEmit",
+    "prepare": "tsdown src/index.ts src/sandbox-entry.ts --format esm --dts --clean",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "emdash",
+    "emdash-plugin",
+    "cms",
+    "stripe",
+    "payments",
+    "checkout",
+    "subscriptions",
+    "webhooks",
+    "commerce",
+    "cloudflare-workers"
+  ],
+  "license": "MIT",
+  "author": "Yushi Matsui <https://github.com/tmyuu>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tmyuu/emdash-stripe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tmyuu/emdash-stripe/issues"
+  },
+  "homepage": "https://github.com/tmyuu/emdash-stripe#readme",
+  "dependencies": {
+    "stripe": "^22.3.0"
+  },
+  "peerDependencies": {
+    "emdash": ">=0.27.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260424.1",
+    "emdash": "^0.27.0",
+    "tsdown": "^0.21.7",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
