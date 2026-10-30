@@ -8,13 +8,22 @@ As of mid-2026 there is no other working Stripe integration for EmDash (the offi
 
 - **CMS entries are the source of truth.** Requests reference entries by collection + id/slug; prices are read server-side from the published entry. Clients can never set amounts.
 - **Two price sources per entry.** A numeric price field (charged via inline `price_data`, zero Stripe catalog management) or a Stripe Price ID field (`price_...` — bringing Stripe-managed pricing and subscriptions). The Price ID wins when both exist.
-- **Verified webhooks, always.** Every delivery is re-fetched from the Stripe API before processing (see [Webhook model](#webhook-model)), and deduplicated.
+- **Verified webhooks, always.** Every delivery is verified by its Stripe signature — or, without a signing secret, re-fetched from the Stripe API — before processing (see [Webhook model](#webhook-model)), and deduplicated.
 - **The host stays in charge of fulfillment.** The plugin records payments; your site reacts via CMS order entries and/or signed event forwarding — no email templates or cart logic baked in.
 
 ## Requirements
 
-- EmDash **0.27+**, registered in-process via `plugins:` (not `sandboxed:` — stripe-node needs the host Worker's `fetch`/`SubtleCrypto`).
+- EmDash **1.x** (1.4+ recommended), registered in-process via `plugins:` (not `sandboxed:` — stripe-node needs the host Worker's `fetch`/`SubtleCrypto`).
 - A Stripe account and secret key.
+
+## Compatibility
+
+| emdash-stripe | EmDash | stripe-node (Stripe API version) |
+| --- | --- | --- |
+| 0.1 – 0.5 | 0.27.x | 22 |
+| 0.6.0 | 1.x | 23 (`2026-10-28.endive`) |
+
+Sites still on EmDash 0.27 should pin `github:tmyuu/emdash-stripe#v0.5.0`.
 
 ## Install
 
@@ -38,7 +47,7 @@ export default defineConfig({
 
 ## Setup
 
-1. **Keys** — set `STRIPE_SECRET_KEY` (and optionally `STRIPE_PUBLISHABLE_KEY`) as Worker secrets, or paste them on the admin **Stripe → Settings** page (the settings page value wins).
+1. **Keys** — set `STRIPE_SECRET_KEY` (and optionally `STRIPE_PUBLISHABLE_KEY` / `STRIPE_WEBHOOK_SECRET`) as Worker secrets, or paste them on the admin **Stripe → Settings** page (the settings page value wins).
 2. **Sellable collections** — on the settings page, map collections to fields (JSON):
 
    ```json
@@ -79,7 +88,7 @@ export default defineConfig({
    recur. `recurringNameTemplate` renders the line-item display name
    (placeholders `{name}`, `{count}`, `{interval}`).
 3. **Currency & price unit** — set the default currency (used when an entry has no currency field) and how numeric prices are interpreted: **major units** (`10.99` = $10.99, `1000` = ¥1000 — zero/three-decimal currencies handled per Stripe rules) or **minor units** (passed as-is).
-4. **Webhook** — register the URL shown on the settings page (`https://your-site/_emdash/api/plugins/stripe/webhook`) in the Stripe Dashboard → Developers → Webhooks. Recommended events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `payment_intent.succeeded`, `payment_intent.payment_failed`, `charge.refunded`, and for subscriptions `customer.subscription.*`, `invoice.paid`, `invoice.payment_failed`. No signing secret is needed (see [Webhook model](#webhook-model)).
+4. **Webhook** — register the URL shown on the settings page (`https://your-site/_emdash/api/plugins/stripe/webhook`) in the Stripe Dashboard → Developers → Webhooks. Recommended events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `payment_intent.succeeded`, `payment_intent.payment_failed`, `charge.refunded`, and for subscriptions `customer.subscription.*`, `invoice.paid`, `invoice.payment_failed`. Then configure the endpoint's signing secret (see [Webhook model](#webhook-model)).
 
 ## Routes
 
@@ -215,11 +224,28 @@ fails with `trusted_not_configured`.
 
 ### Error shape
 
-All routes return `{ "ok": false, "error": "<code>", "detail"?: "…" }` on failure — e.g. `not_configured`, `unknown_collection`, `unknown_item`, `missing_price`, `mixed_currencies`, `recurring_requires_subscription`, `stripe_error`.
+All routes except `webhook` return `{ "ok": false, "error": "<code>", "detail"?: "…" }` on failure — e.g. `not_configured`, `unknown_collection`, `unknown_item`, `missing_price`, `mixed_currencies`, `recurring_requires_subscription`, `stripe_error`.
 
 ## Webhook model
 
-EmDash parses plugin-route request bodies before handlers run, so the raw bytes required for Stripe *signature* verification never reach a plugin. This plugin therefore uses Stripe's other supported authenticity model: the delivery is treated as an untrusted notification — the handler validates the event ID shape, **re-fetches the event from the Stripe API**, and processes only what Stripe returns. A forged POST can, at worst, make the plugin re-read a real event, which the KV idempotency marker then deduplicates. Unverifiable deliveries are not acknowledged, so Stripe retries genuine events.
+The `webhook` route (POST only) declares a raw text body and the `Stripe-Signature` header, so the handler sees the exact bytes Stripe signed. It answers with a plain JSON body (`{ "received": true, "type": "…" }`) and an HTTP status Stripe acts on.
+
+### Signing secret (recommended)
+
+1. In the Stripe Dashboard → Developers → Webhooks, open (or create) the endpoint for `https://your-site/_emdash/api/plugins/stripe/webhook`. **Start in test mode.**
+2. Set the endpoint's **API version to `2026-10-28.endive`** — the version stripe-node 23 and this plugin are typed against.
+3. Reveal the endpoint's **Signing secret** (`whsec_...`) and either paste it into **Stripe → Settings → Webhook signing secret** or set it as the `STRIPE_WEBHOOK_SECRET` Worker secret (the settings page value wins). Test and live endpoints have different secrets.
+4. Send a test event (Dashboard "Send test event", or `stripe trigger checkout.session.completed`) and check the endpoint's delivery log for `200`.
+
+With a signing secret, each delivery is verified with Stripe's signature scheme (Web Crypto, default 5-minute timestamp tolerance). A missing or invalid signature is answered with **HTTP 400** (`missing_signature` / `invalid_signature`) and nothing is processed. For local testing, `stripe listen --forward-to …` prints its own `whsec_...` — use that one while it runs.
+
+### Fallback without a signing secret
+
+Without a signing secret the plugin keeps the 0.5 behaviour: the delivery is treated as an untrusted notification — the handler validates the event ID shape, **re-fetches the event from the Stripe API**, and processes only what Stripe returns. A forged POST can, at worst, make the plugin re-read a real event, which the KV idempotency marker then deduplicates. This costs one API call per delivery, and payloads come back in the account's default API version rather than the endpoint's.
+
+### Delivery semantics (both modes)
+
+Events are deduplicated by event ID. Deliveries that cannot be verified against the Stripe API or whose [forward](#2-signed-event-forwarding) fails are not acknowledged (HTTP 500), so Stripe retries them; processing is idempotent.
 
 Verified events update the **payments** storage collection (visible on the admin *Payments* page): Checkout Sessions, plugin-created Payment Intents, refunds, subscriptions, and invoices.
 
@@ -301,13 +327,24 @@ Subscription lifecycle and invoice events are recorded, and session metadata is 
 - **In-process only.** Whether stripe-node works inside EmDash's sandboxed isolates is unverified; marketplace (sandboxed) distribution is a v2 goal.
 - Amounts are authoritative from Stripe at webhook time — records never trust client-side totals.
 - Saved cards / Customer Portal / cart state are host-app concerns and intentionally out of scope for v1.
-- Test with `stripe trigger checkout.session.completed` (Stripe CLI) — re-fetch verification works with CLI-triggered test events; `stripe listen --forward-to` also works since payloads only need a valid event ID.
+- Test with `stripe trigger checkout.session.completed` (Stripe CLI) — both signature verification and the re-fetch fallback work with CLI-triggered test events.
+
+## Upgrading from 0.5
+
+0.6 requires EmDash 1.x and moves to stripe-node 23 (Stripe API `2026-10-28.endive`).
+
+1. Bump `emdash` and `@emdash-cms/cloudflare` to `^1.4` (plus this plugin), and follow EmDash's own 1.x upgrade notes for the site.
+2. Run `emdash migrate` against each database **before** deploying the new build.
+3. Configure the webhook signing secret (see [Webhook model](#signing-secret-recommended)) and set the endpoint API version to `2026-10-28.endive`. Until a secret is set, webhooks keep working through the re-fetch fallback.
+4. Host apps that call Stripe directly with stripe-node 23 must drop `payment_method_types`, which the new API version removed — e.g. `setupIntents.create({ payment_method_types: ["card"] })` → `setupIntents.create({ automatic_payment_methods: { enabled: true } })` or `allowed_payment_method_types: ["card"]`. The plugin itself never sets it.
+5. The webhook route now responds with a plain JSON body instead of EmDash's `{ success, data }` envelope; only Stripe consumes it, so no host change is needed.
 
 ## Development
 
 ```sh
 pnpm build       # tsdown → dist/ (committed, so github: installs work)
 pnpm typecheck   # tsc --noEmit
+pnpm test        # vitest (no network: Stripe calls are stubbed)
 ```
 
 ## License
