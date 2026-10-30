@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { hmacSha256Hex, verifyTrustedToken } from "../src/stripe.js";
+import { hmacSha256Hex, verifyTrustedToken, timingSafeEqual } from "../src/stripe.js";
 import { resolveTrusted } from "../src/sandbox-entry.js";
 import type { Settings } from "../src/config.js";
 
@@ -14,6 +14,17 @@ async function mint(
 }
 
 const cfg = { forwardSecret: SECRET } as Settings;
+
+describe("timingSafeEqual", () => {
+  it("matches equal strings and rejects any difference", () => {
+    const a = "0123456789abcdef".repeat(4);
+    expect(timingSafeEqual(a, a)).toBe(true);
+    expect(timingSafeEqual(a, `${a.slice(0, -1)}0`)).toBe(false);
+    expect(timingSafeEqual(a, `f${a.slice(1)}`)).toBe(false);
+    expect(timingSafeEqual(a, a.slice(1))).toBe(false);
+    expect(timingSafeEqual("", "")).toBe(true);
+  });
+});
 
 describe("verifyTrustedToken", () => {
   it("round-trips a valid token", async () => {

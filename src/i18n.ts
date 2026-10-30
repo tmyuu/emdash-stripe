@@ -43,12 +43,16 @@ export interface AdminMessages {
   keyStatusLive: string;
   keyStatusTest: string;
   keyStatusMissing: string;
+  webhookSecretStatusSet: string;
+  webhookSecretStatusMissing: string;
 
   // Keep labels short; put the supplementary detail in the matching placeholder.
   secretKeyLabel: string;
   secretKeyPlaceholder: string;
   publishableKeyLabel: string;
   publishableKeyPlaceholder: string;
+  webhookSecretLabel: string;
+  webhookSecretPlaceholder: string;
   currencyLabel: string;
   currencyPlaceholder: string;
   priceUnitLabel: string;
@@ -135,20 +139,25 @@ const en: Locale = {
 
     settingsTitle: "Stripe",
     settingsIntro:
-      "Accept Stripe payments for your content entries. Map one or more collections as sellable below; each entry needs either a numeric price field or a Stripe Price ID field. API keys can also be provided via the host environment (STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY).",
+      "Accept Stripe payments for your content entries. Map one or more collections as sellable below; each entry needs either a numeric price field or a Stripe Price ID field. API keys can also be provided via the host environment (STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY / STRIPE_WEBHOOK_SECRET).",
     saveButton: "Save settings",
 
     webhookInfo:
-      "Webhook endpoint: register {url} in the Stripe Dashboard (Developers → Webhooks). Deliveries are authenticated by re-fetching each event from the Stripe API, so no signing secret is required.",
+      "Webhook endpoint: register {url} in the Stripe Dashboard (Developers → Webhooks), then paste the endpoint's signing secret below so deliveries are verified by signature.",
     keyStatusLive: "Secret key: configured (live mode).",
     keyStatusTest: "Secret key: configured (test mode).",
     keyStatusMissing:
       "Secret key: not configured — payments are disabled until one is set here or via STRIPE_SECRET_KEY.",
+    webhookSecretStatusSet: "Webhook signing secret: configured — deliveries are verified by signature.",
+    webhookSecretStatusMissing:
+      "Webhook signing secret: not configured — each delivery is re-fetched from the Stripe API instead (slower; set one here or via STRIPE_WEBHOOK_SECRET).",
 
     secretKeyLabel: "Secret key",
     secretKeyPlaceholder: "sk_live_... (leave blank to keep the current key)",
     publishableKeyLabel: "Publishable key",
     publishableKeyPlaceholder: "pk_live_... (exposed to the site via the config route)",
+    webhookSecretLabel: "Webhook signing secret",
+    webhookSecretPlaceholder: "whsec_... (from the webhook endpoint; leave blank to keep the current value)",
     currencyLabel: "Currency",
     currencyPlaceholder: "usd (ISO code; used when an entry has no currency field)",
     priceUnitLabel: "Price field unit",
@@ -232,20 +241,25 @@ const ja: Locale = {
 
     settingsTitle: "Stripe",
     settingsIntro:
-      "コンテンツエントリをStripeで販売できます。下の設定で販売対象コレクションをマッピングしてください。各エントリには数値の価格フィールド、またはStripe Price IDフィールドが必要です。APIキーはホスト環境変数(STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY)でも指定できます。",
+      "コンテンツエントリをStripeで販売できます。下の設定で販売対象コレクションをマッピングしてください。各エントリには数値の価格フィールド、またはStripe Price IDフィールドが必要です。APIキーはホスト環境変数(STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY / STRIPE_WEBHOOK_SECRET)でも指定できます。",
     saveButton: "設定を保存",
 
     webhookInfo:
-      "Webhookエンドポイント: {url} をStripeダッシュボード(開発者 → Webhook)に登録してください。受信イベントはStripe APIから再取得して真正性を検証するため、署名シークレットは不要です。",
+      "Webhookエンドポイント: {url} をStripeダッシュボード(開発者 → Webhook)に登録し、エンドポイントの署名シークレットを下に入力してください。受信イベントを署名で検証します。",
     keyStatusLive: "シークレットキー: 設定済み(本番モード)。",
     keyStatusTest: "シークレットキー: 設定済み(テストモード)。",
     keyStatusMissing:
       "シークレットキー: 未設定 — ここで設定するか STRIPE_SECRET_KEY を指定するまで決済は無効です。",
+    webhookSecretStatusSet: "Webhook署名シークレット: 設定済み — 受信イベントを署名で検証します。",
+    webhookSecretStatusMissing:
+      "Webhook署名シークレット: 未設定 — 受信イベントを毎回Stripe APIから再取得して検証します(ここで設定するか STRIPE_WEBHOOK_SECRET を指定してください)。",
 
     secretKeyLabel: "シークレットキー",
     secretKeyPlaceholder: "sk_live_...(空欄なら現在のキーを維持)",
     publishableKeyLabel: "公開可能キー",
     publishableKeyPlaceholder: "pk_live_...(configルート経由でサイトに公開されます)",
+    webhookSecretLabel: "Webhook署名シークレット",
+    webhookSecretPlaceholder: "whsec_...(Webhookエンドポイントの署名シークレット。空欄なら現在の値を維持)",
     currencyLabel: "通貨",
     currencyPlaceholder: "jpy(ISOコード。エントリに通貨フィールドが無い場合に使用)",
     priceUnitLabel: "価格フィールドの単位",

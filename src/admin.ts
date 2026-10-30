@@ -1,9 +1,10 @@
 /**
  * Block Kit admin pages for emdash-stripe.
  *
- *   - `/settings` — API keys, currency, sellable-collection mappings, checkout
- *                   options, order mirroring, event forwarding. Also shows the
- *                   webhook endpoint URL to register in the Stripe Dashboard.
+ *   - `/settings` — API keys, webhook signing secret, currency,
+ *                   sellable-collection mappings, checkout options, order
+ *                   mirroring, event forwarding. Also shows the webhook
+ *                   endpoint URL to register in the Stripe Dashboard.
  *   - `/payments` — the most recent payment records collected from webhooks.
  *
  * All human-readable text comes from `src/i18n.ts`, selected by the runtime
@@ -30,6 +31,7 @@ async function buildSettingsPage(ctx: PluginContext) {
       { type: "section", text: t.settingsIntro },
       { type: "section", text: t.webhookInfo.replace("{url}", webhookUrl) },
       { type: "section", text: keyStatus },
+      { type: "section", text: cfg.webhookSecret ? t.webhookSecretStatusSet : t.webhookSecretStatusMissing },
       {
         type: "form",
         submit: { label: t.saveButton, action_id: "save_settings" },
@@ -43,6 +45,7 @@ async function buildSettingsPage(ctx: PluginContext) {
           },
           { type: "secret_input", action_id: "secretKey", label: t.secretKeyLabel, placeholder: t.secretKeyPlaceholder },
           { type: "text_input", action_id: "publishableKey", label: t.publishableKeyLabel, placeholder: t.publishableKeyPlaceholder, initial_value: (await getStr(ctx, K.publishableKey)) },
+          { type: "secret_input", action_id: "webhookSecret", label: t.webhookSecretLabel, placeholder: t.webhookSecretPlaceholder },
           { type: "text_input", action_id: "currency", label: t.currencyLabel, placeholder: t.currencyPlaceholder, initial_value: cfg.currency },
           {
             type: "select",
@@ -124,6 +127,7 @@ async function saveSettings(ctx: PluginContext, values: Record<string, unknown>)
     // secrets: only overwrite when a new value is entered (blank = keep)
     for (const [key, kvKey] of [
       ["secretKey", K.secretKey],
+      ["webhookSecret", K.webhookSecret],
       ["forwardSecret", K.forwardSecret],
     ] as const) {
       const v = values[key];

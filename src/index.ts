@@ -38,16 +38,18 @@
  *     ],
  *   });
  *
- * Webhook authenticity: EmDash parses route request bodies before handlers
- * run, so the raw bytes needed for Stripe signature verification never reach
- * the plugin. Instead the webhook handler treats each delivery as an
- * untrusted notification, re-fetches the event by ID from the Stripe API, and
- * processes only what Stripe returns — forged payloads cannot inject data.
+ * Webhook authenticity: the webhook route receives the raw request body and
+ * the `Stripe-Signature` header (EmDash 1.x), so deliveries are verified
+ * against the endpoint's signing secret. Without a signing secret the
+ * handler falls back to treating each delivery as an untrusted notification,
+ * re-fetching the event by ID from the Stripe API — forged payloads cannot
+ * inject data either way.
  *
- * Configuration (API keys, currency, collection mappings, checkout options)
- * is done at runtime from the plugin's admin settings page; the secret /
- * publishable keys may also come from the host Worker env
- * (`STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`).
+ * Configuration (API keys, webhook signing secret, currency, collection
+ * mappings, checkout options) is done at runtime from the plugin's admin
+ * settings page; the keys and signing secret may also come from the host
+ * Worker env (`STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`,
+ * `STRIPE_WEBHOOK_SECRET`).
  */
 
 import type { PluginDescriptor } from "emdash";
@@ -59,7 +61,7 @@ import type { PluginDescriptor } from "emdash";
 export function stripePayments(): PluginDescriptor {
   return {
     id: "stripe",
-    version: "0.5.0",
+    version: "0.6.0",
     format: "standard",
     entrypoint: "emdash-stripe/sandbox",
     // content:read — resolve sellable entries (names/prices) server-side.
