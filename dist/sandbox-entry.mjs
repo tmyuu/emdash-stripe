@@ -1,3 +1,4 @@
+import { pluginResponse } from "emdash/plugin";
 import { env } from "cloudflare:workers";
 import Stripe from "stripe";
 //#region src/stripe.ts
@@ -9,13 +10,14 @@ import Stripe from "stripe";
 * Stripe API through the platform `fetch` and signs with Web Crypto.
 */
 /**
-* Build a Stripe client. stripe-node v22 resolves a Workers-native build via
+* Build a Stripe client. stripe-node v23 resolves a Workers-native build via
 * the `workerd` export condition (fetch + SubtleCrypto by default); passing
 * the fetch HTTP client explicitly keeps behavior identical on non-Workers
 * dev servers (e.g. a Node-based `astro dev`).
 *
 * `apiVersion` is intentionally omitted: requests use the SDK's pinned
-* version, which is what the bundled TypeScript types describe.
+* version (2026-10-28.endive for v23), which is what the bundled TypeScript
+* types describe.
 */
 function getStripe(secretKey) {
 	return new Stripe(secretKey, { httpClient: Stripe.createFetchHttpClient() });
@@ -64,6 +66,15 @@ function formatAmount(minor, currency) {
 	return `${(minor / (decimals === 0 ? 1 : decimals === 3 ? 1e3 : 100)).toFixed(decimals)} ${currency.toUpperCase()}`;
 }
 /**
+* Verify a Stripe webhook delivery against the endpoint's signing secret and
+* return the event. Throws when the signature header is malformed, does not
+* match the raw body, or is outside Stripe's default timestamp tolerance.
+* Web Crypto keeps it identical on Workers and Node dev servers.
+*/
+function constructWebhookEvent(stripe, rawBody, signatureHeader, secret) {
+	return stripe.webhooks.constructEventAsync(rawBody, signatureHeader, secret, void 0, Stripe.createSubtleCryptoProvider());
+}
+/**
 * HMAC-SHA256 over `payload` with `secret`, hex-encoded. Used to sign
 * forwarded webhook events (`X-Emdash-Stripe-Signature: t=<unix>,v1=<hex>`
 * where the signed payload is `<unix>.<body>`), mirroring Stripe's own
@@ -77,6 +88,16 @@ async function hmacSha256Hex(secret, payload) {
 	}, false, ["sign"]);
 	const sig = await crypto.subtle.sign("HMAC", key, enc.encode(payload));
 	return Array.from(new Uint8Array(sig), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+/**
+* Compare two strings in time independent of where they differ (length is
+* not secret here: both sides are fixed-size hex digests).
+*/
+function timingSafeEqual(a, b) {
+	if (a.length !== b.length) return false;
+	let diff = 0;
+	for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+	return diff === 0;
 }
 /**
 * Verify a host-signed request token and return its payload, or null.
@@ -93,7 +114,7 @@ async function verifyTrustedToken(secret, token) {
 	if (!m) return null;
 	const [, t, payloadB64, sig] = m;
 	if (Math.abs(Date.now() / 1e3 - Number(t)) > 300) return null;
-	if (await hmacSha256Hex(secret, `${t}.${payloadB64}`) !== sig) return null;
+	if (!timingSafeEqual(await hmacSha256Hex(secret, `${t}.${payloadB64}`), sig)) return null;
 	try {
 		const parsed = JSON.parse(atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/")));
 		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
@@ -117,16 +138,21 @@ const LOCALES = {
 			languageOptionLabel: "English",
 			languageFieldLabel: "Language",
 			settingsTitle: "Stripe",
-			settingsIntro: "Accept Stripe payments for your content entries. Map one or more collections as sellable below; each entry needs either a numeric price field or a Stripe Price ID field. API keys can also be provided via the host environment (STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY).",
+			settingsIntro: "Accept Stripe payments for your content entries. Map one or more collections as sellable below; each entry needs either a numeric price field or a Stripe Price ID field. API keys can also be provided via the host environment (STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY / EMDASH_STRIPE_WEBHOOK_SECRET).",
 			saveButton: "Save settings",
-			webhookInfo: "Webhook endpoint: register {url} in the Stripe Dashboard (Developers → Webhooks). Deliveries are authenticated by re-fetching each event from the Stripe API, so no signing secret is required.",
+			webhookInfo: "Webhook endpoint: register {url} in the Stripe Dashboard (Developers → Webhooks), then paste the endpoint's signing secret below so deliveries are verified by signature.",
 			keyStatusLive: "Secret key: configured (live mode).",
 			keyStatusTest: "Secret key: configured (test mode).",
 			keyStatusMissing: "Secret key: not configured — payments are disabled until one is set here or via STRIPE_SECRET_KEY.",
+			webhookSecretStatusSet: "Webhook signing secret: configured — deliveries are verified by signature.",
+			webhookSecretStatusMissing: "Webhook signing secret: not configured — each delivery is re-fetched from the Stripe API instead (slower; set one here or via EMDASH_STRIPE_WEBHOOK_SECRET).",
 			secretKeyLabel: "Secret key",
 			secretKeyPlaceholder: "sk_live_... (leave blank to keep the current key)",
 			publishableKeyLabel: "Publishable key",
 			publishableKeyPlaceholder: "pk_live_... (exposed to the site via the config route)",
+			webhookSecretLabel: "Webhook signing secret",
+			webhookSecretPlaceholder: "whsec_... (from the webhook endpoint; leave blank to keep the current value)",
+			clearWebhookSecretLabel: "Clear the saved webhook signing secret (falls back to the Worker env or re-fetch)",
 			currencyLabel: "Currency",
 			currencyPlaceholder: "usd (ISO code; used when an entry has no currency field)",
 			priceUnitLabel: "Price field unit",
@@ -197,16 +223,21 @@ const LOCALES = {
 			languageOptionLabel: "日本語",
 			languageFieldLabel: "言語",
 			settingsTitle: "Stripe",
-			settingsIntro: "コンテンツエントリをStripeで販売できます。下の設定で販売対象コレクションをマッピングしてください。各エントリには数値の価格フィールド、またはStripe Price IDフィールドが必要です。APIキーはホスト環境変数(STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY)でも指定できます。",
+			settingsIntro: "コンテンツエントリをStripeで販売できます。下の設定で販売対象コレクションをマッピングしてください。各エントリには数値の価格フィールド、またはStripe Price IDフィールドが必要です。APIキーはホスト環境変数(STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY / EMDASH_STRIPE_WEBHOOK_SECRET)でも指定できます。",
 			saveButton: "設定を保存",
-			webhookInfo: "Webhookエンドポイント: {url} をStripeダッシュボード(開発者 → Webhook)に登録してください。受信イベントはStripe APIから再取得して真正性を検証するため、署名シークレットは不要です。",
+			webhookInfo: "Webhookエンドポイント: {url} をStripeダッシュボード(開発者 → Webhook)に登録し、エンドポイントの署名シークレットを下に入力してください。受信イベントを署名で検証します。",
 			keyStatusLive: "シークレットキー: 設定済み(本番モード)。",
 			keyStatusTest: "シークレットキー: 設定済み(テストモード)。",
 			keyStatusMissing: "シークレットキー: 未設定 — ここで設定するか STRIPE_SECRET_KEY を指定するまで決済は無効です。",
+			webhookSecretStatusSet: "Webhook署名シークレット: 設定済み — 受信イベントを署名で検証します。",
+			webhookSecretStatusMissing: "Webhook署名シークレット: 未設定 — 受信イベントを毎回Stripe APIから再取得して検証します(ここで設定するか EMDASH_STRIPE_WEBHOOK_SECRET を指定してください)。",
 			secretKeyLabel: "シークレットキー",
 			secretKeyPlaceholder: "sk_live_...(空欄なら現在のキーを維持)",
 			publishableKeyLabel: "公開可能キー",
 			publishableKeyPlaceholder: "pk_live_...(configルート経由でサイトに公開されます)",
+			webhookSecretLabel: "Webhook署名シークレット",
+			webhookSecretPlaceholder: "whsec_...(Webhookエンドポイントの署名シークレット。空欄なら現在の値を維持)",
+			clearWebhookSecretLabel: "保存済みのWebhook署名シークレットを削除(Worker環境変数または再取得方式に戻す)",
 			currencyLabel: "通貨",
 			currencyPlaceholder: "jpy(ISOコード。エントリに通貨フィールドが無い場合に使用)",
 			priceUnitLabel: "価格フィールドの単位",
@@ -282,6 +313,7 @@ const K = {
 	language: "settings:language",
 	secretKey: "settings:secretKey",
 	publishableKey: "settings:publishableKey",
+	webhookSecret: "settings:webhookSecret",
 	currency: "settings:currency",
 	priceUnit: "settings:priceUnit",
 	mappings: "settings:mappings",
@@ -376,6 +408,7 @@ async function loadSettings(ctx) {
 		lang: normalizeLang(await getStr(ctx, K.language, "en")),
 		secretKey: await getStr(ctx, K.secretKey) || envStr("STRIPE_SECRET_KEY"),
 		publishableKey: await getStr(ctx, K.publishableKey) || envStr("STRIPE_PUBLISHABLE_KEY"),
+		webhookSecret: await getStr(ctx, K.webhookSecret) || envStr("EMDASH_STRIPE_WEBHOOK_SECRET"),
 		currency: (await getStr(ctx, K.currency, "usd")).toLowerCase(),
 		priceUnit: await getStr(ctx, K.priceUnit) === "minor" ? "minor" : "major",
 		mappings: parseMappings(await getStr(ctx, K.mappings)),
@@ -418,6 +451,10 @@ async function buildSettingsPage(ctx) {
 			text: keyStatus
 		},
 		{
+			type: "section",
+			text: cfg.webhookSecret ? t.webhookSecretStatusSet : t.webhookSecretStatusMissing
+		},
+		{
 			type: "form",
 			submit: {
 				label: t.saveButton,
@@ -446,6 +483,18 @@ async function buildSettingsPage(ctx) {
 					label: t.publishableKeyLabel,
 					placeholder: t.publishableKeyPlaceholder,
 					initial_value: await getStr(ctx, K.publishableKey)
+				},
+				{
+					type: "secret_input",
+					action_id: "webhookSecret",
+					label: t.webhookSecretLabel,
+					placeholder: t.webhookSecretPlaceholder
+				},
+				{
+					type: "toggle",
+					action_id: "clearWebhookSecret",
+					label: t.clearWebhookSecretLabel,
+					initial_value: false
 				},
 				{
 					type: "text_input",
@@ -609,10 +658,15 @@ async function saveSettings(ctx, values) {
 			["recoveryEnabled", K.recoveryEnabled]
 		]) if (values[key] === true) await ctx.kv.set(kvKey, "1");
 		else await ctx.kv.delete(kvKey);
-		for (const [key, kvKey] of [["secretKey", K.secretKey], ["forwardSecret", K.forwardSecret]]) {
+		for (const [key, kvKey] of [
+			["secretKey", K.secretKey],
+			["webhookSecret", K.webhookSecret],
+			["forwardSecret", K.forwardSecret]
+		]) {
 			const v = values[key];
 			if (typeof v === "string" && v.trim()) await ctx.kv.set(kvKey, v.trim());
 		}
+		if (values.clearWebhookSecret === true) await ctx.kv.delete(K.webhookSecret);
 		return {
 			...await buildSettingsPage(ctx),
 			toast: {
@@ -711,6 +765,46 @@ async function handleAdmin(routeCtx, ctx) {
 }
 //#endregion
 //#region src/sandbox-entry.ts
+/**
+* Sandbox entrypoint for emdash-stripe.
+*
+* Routes:
+*   - `checkout`       (public) — resolve sellable CMS entries into Stripe
+*                                 line items and create a Checkout Session
+*                                 (hosted redirect or embedded page).
+*   - `payment-intent` (public) — same resolution, but create a PaymentIntent
+*                                 for custom payment UIs (Payment Element).
+*   - `subscription`   (public) — create a default_incomplete Subscription for
+*                                 embedded payment UIs (trusted customer only).
+*   - `session`        (public) — status lookup for success pages.
+*   - `config`         (public) — publishable key + sellable collections, so
+*                                 the site can render buy buttons dynamically.
+*   - `webhook`        (public) — Stripe webhook endpoint (see below).
+*   - `admin`                   — Block Kit settings + payments pages.
+*
+* Prices are never trusted from the client: requests reference entries by
+* collection + id/slug, and amounts come from the published entry (numeric
+* price field → inline `price_data`) or from Stripe itself (Price ID field).
+*
+* Webhook authenticity: the `webhook` route declares a raw text body and the
+* `Stripe-Signature` header (EmDash 1.x route `request` options), so the
+* handler sees the exact bytes Stripe signed. With a signing secret
+* configured, each delivery is verified by signature (Web Crypto, Stripe's
+* default timestamp tolerance) and rejected with HTTP 400 when the signature
+* is missing or wrong. Without one, the delivery is treated as an untrusted
+* hint as in 0.5: the handler validates the event ID shape, re-fetches the
+* event from the Stripe API, and processes only what Stripe returns. Either
+* way, events are deduplicated via a KV marker, recorded in the `payments`
+* storage collection, optionally mirrored as CMS order entries, and
+* optionally forwarded to a host URL as an HMAC-signed POST so host apps can
+* fulfill orders, send email, etc. Forwarding is at-least-once: a delivery is
+* only acknowledged to Stripe after the host endpoint accepts the forward, so
+* a failing host is covered by Stripe's own webhook retries.
+*
+* The plugin must run in-process (`plugins:`, not `sandboxed:`): stripe-node
+* relies on the host Worker's global fetch/SubtleCrypto, which are not
+* verified inside an isolate.
+*/
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRICE_ID_RE = /^price_[A-Za-z0-9]+$/;
 const EVENT_ID_RE = /^evt_[A-Za-z0-9]+$/;
@@ -1105,16 +1199,26 @@ async function handleSubscription(routeCtx, ctx) {
 				active: true,
 				limit: 1
 			})).data[0]?.id;
-			if (!priceId) priceId = (await stripe.prices.create({
-				currency: i.currency,
-				unit_amount: i.unitAmount,
-				recurring: {
-					interval: i.interval,
-					interval_count: i.intervalCount ?? 1
-				},
-				product_data: { name: i.name },
-				lookup_key: lookupKey
-			})).id;
+			if (!priceId) try {
+				priceId = (await stripe.prices.create({
+					currency: i.currency,
+					unit_amount: i.unitAmount,
+					recurring: {
+						interval: i.interval,
+						interval_count: i.intervalCount ?? 1
+					},
+					product_data: { name: i.name },
+					lookup_key: lookupKey,
+					transfer_lookup_key: true
+				})).id;
+			} catch (err) {
+				priceId = (await stripe.prices.list({
+					lookup_keys: [lookupKey],
+					active: true,
+					limit: 1
+				})).data[0]?.id;
+				if (!priceId) throw err;
+			}
 		} catch (err) {
 			ctx.log.error(`Failed to resolve a recurring price for ${lookupKey}`, err);
 			return fail("price_lookup_failed", lookupKey);
@@ -1286,6 +1390,29 @@ async function forwardEvent(ctx, cfg, event) {
 		return false;
 	}
 }
+/**
+* Amount per billing period across all subscription items, or null when an
+* item has no fixed unit amount (e.g. tiered/metered) or currencies differ.
+* (exported for tests)
+*/
+function subscriptionAmount(sub) {
+	const items = sub.items?.data ?? [];
+	if (items.length === 0) return null;
+	const currency = items[0].price?.currency;
+	let total = 0;
+	for (const item of items) {
+		const unit = item.price?.unit_amount;
+		if (unit == null || item.price?.currency !== currency) return null;
+		total += unit * (item.quantity ?? 1);
+	}
+	return total;
+}
+/**
+* Event payloads arrive in one of two API versions: signature-verified
+* deliveries are rendered in the webhook endpoint's API version, re-fetched
+* ones (no signing secret) in the account's default version. Shapes that
+* moved between versions are therefore read defensively below.
+*/
 async function processEvent(ctx, cfg, event) {
 	const type = event.type;
 	if (type.startsWith("checkout.session.")) {
@@ -1366,11 +1493,10 @@ async function processEvent(ctx, cfg, event) {
 		if (type !== "customer.subscription.created" && type !== "customer.subscription.updated" && type !== "customer.subscription.deleted") return;
 		const sub = event.data.object;
 		const item = sub.items?.data?.[0];
-		const unit = item?.price?.unit_amount ?? null;
 		await upsertPayment(ctx, sub.id, {
 			objectType: "subscription",
 			status: type === "customer.subscription.deleted" ? "canceled" : sub.status,
-			amount: unit != null ? unit * (item?.quantity ?? 1) : null,
+			amount: subscriptionAmount(sub),
 			currency: sub.currency ?? item?.price?.currency ?? null,
 			description: sub.metadata?.emdash_desc ?? item?.price?.nickname ?? null,
 			mode: "subscription",
@@ -1406,30 +1532,83 @@ async function processEvent(ctx, cfg, event) {
 		return;
 	}
 }
+/**
+* Raw JSON response for the webhook route (`response: "raw"`). The status is
+* what Stripe acts on: only 2xx acknowledges a delivery. Thrown errors still
+* surface as HTTP 500, which Stripe retries.
+*/
+function webhookReply(status, body) {
+	return pluginResponse({
+		status,
+		headers: { "content-type": "application/json" },
+		body: {
+			kind: "text",
+			value: JSON.stringify(body)
+		}
+	});
+}
+/**
+* Read a declared request header. Sandboxed-style route contexts carry a
+* plain record with lowercase keys; a real `Headers` object is handled too.
+*/
+function headerValue(headers, name) {
+	if (!headers || typeof headers !== "object") return void 0;
+	const v = typeof headers.get === "function" ? headers.get(name) : headers[name];
+	return typeof v === "string" && v ? v : void 0;
+}
+/** (exported for tests) */
 async function handleWebhook(routeCtx, ctx) {
-	const input = routeCtx.input ?? {};
-	const id = typeof input.id === "string" ? input.id : "";
-	if (!EVENT_ID_RE.test(id)) return {
-		received: false,
-		error: "invalid_event"
-	};
 	const cfg = await loadSettings(ctx);
-	if (!cfg.secretKey) return {
+	if (!cfg.secretKey) return webhookReply(200, {
 		received: false,
 		error: "not_configured"
-	};
-	const dedupKey = `state:evt:${id}`;
-	if (await ctx.kv.get(dedupKey)) return {
-		received: true,
-		duplicate: true
-	};
+	});
+	const raw = typeof routeCtx.input === "string" ? routeCtx.input : "";
 	const stripe = getStripe(cfg.secretKey);
 	let event;
-	try {
-		event = await stripe.events.retrieve(id);
-	} catch (err) {
-		ctx.log.warn(`Webhook event ${id} could not be verified against the Stripe API`, { message: err.message });
-		throw new Error("event_verification_failed");
+	let dedupKey;
+	if (cfg.webhookSecret) {
+		const signature = headerValue(routeCtx.request.headers, "stripe-signature");
+		if (!signature) return webhookReply(400, {
+			received: false,
+			error: "missing_signature"
+		});
+		try {
+			event = await constructWebhookEvent(stripe, raw, signature, cfg.webhookSecret);
+		} catch (err) {
+			ctx.log.warn("Webhook signature verification failed", { message: err.message });
+			return webhookReply(400, {
+				received: false,
+				error: "invalid_signature"
+			});
+		}
+		dedupKey = `state:evt:${event.id}`;
+		if (await ctx.kv.get(dedupKey)) return webhookReply(200, {
+			received: true,
+			duplicate: true
+		});
+	} else {
+		let id = "";
+		try {
+			const parsed = JSON.parse(raw);
+			const v = parsed && typeof parsed === "object" ? parsed.id : void 0;
+			if (typeof v === "string") id = v;
+		} catch {}
+		if (!EVENT_ID_RE.test(id)) return webhookReply(200, {
+			received: false,
+			error: "invalid_event"
+		});
+		dedupKey = `state:evt:${id}`;
+		if (await ctx.kv.get(dedupKey)) return webhookReply(200, {
+			received: true,
+			duplicate: true
+		});
+		try {
+			event = await stripe.events.retrieve(id);
+		} catch (err) {
+			ctx.log.warn(`Webhook event ${id} could not be verified against the Stripe API`, { message: err.message });
+			throw new Error("event_verification_failed");
+		}
 	}
 	await processEvent(ctx, cfg, event);
 	if (!await forwardEvent(ctx, cfg, event)) throw new Error("event_forward_failed");
@@ -1437,10 +1616,10 @@ async function handleWebhook(routeCtx, ctx) {
 		type: event.type,
 		at: (/* @__PURE__ */ new Date()).toISOString()
 	});
-	return {
+	return webhookReply(200, {
 		received: true,
 		type: event.type
-	};
+	});
 }
 /**
 * Attach a localized human-readable `message` (from the Language setting) to
@@ -1488,9 +1667,15 @@ var sandbox_entry_default = { routes: {
 	},
 	webhook: {
 		public: true,
+		methods: ["POST"],
+		request: {
+			body: "text",
+			headers: ["stripe-signature"]
+		},
+		response: "raw",
 		handler: handleWebhook
 	},
 	admin: { handler: handleAdmin }
 } };
 //#endregion
-export { sandbox_entry_default as default, itemsMetadata, renderRecurringName, resolveTrusted, sanitizeMetadata };
+export { sandbox_entry_default as default, handleWebhook, itemsMetadata, renderRecurringName, resolveTrusted, sanitizeMetadata, subscriptionAmount };

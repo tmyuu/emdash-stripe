@@ -3,10 +3,13 @@
  *
  * Everything is configured from the admin settings page and stored in the
  * plugin KV (standard-format plugins do not receive descriptor options in the
- * entrypoint). The Stripe API keys may alternatively come from the host
- * Worker env — `STRIPE_SECRET_KEY` / `STRIPE_PUBLISHABLE_KEY` — which is the
- * recommended place for the secret key in production (wrangler secrets). A
- * key saved in the settings page takes precedence, so a bad key can always be
+ * entrypoint). The Stripe API keys and the webhook signing secret may
+ * alternatively come from the host Worker env — `STRIPE_SECRET_KEY` /
+ * `STRIPE_PUBLISHABLE_KEY` / `EMDASH_STRIPE_WEBHOOK_SECRET` — which is the
+ * recommended place for secrets in production (wrangler secrets). The signing
+ * secret uses a plugin-specific name: a whsec belongs to one endpoint, and a
+ * host's own `STRIPE_WEBHOOK_SECRET` is for a different one. A value
+ * saved in the settings page takes precedence, so a bad key can always be
  * fixed from the admin UI.
  */
 
@@ -19,6 +22,7 @@ export const K = {
   language: "settings:language",
   secretKey: "settings:secretKey",
   publishableKey: "settings:publishableKey",
+  webhookSecret: "settings:webhookSecret",
   currency: "settings:currency",
   priceUnit: "settings:priceUnit",
   mappings: "settings:mappings",
@@ -150,6 +154,11 @@ export interface Settings {
   lang: Lang;
   secretKey: string;
   publishableKey: string;
+  /**
+   * Webhook endpoint signing secret (`whsec_...`). Set = deliveries are
+   * verified by signature; empty = each event is re-fetched from the API.
+   */
+  webhookSecret: string;
   /** Default ISO currency code (lowercase), e.g. "usd". */
   currency: string;
   /** How numeric price fields are interpreted. */
@@ -208,6 +217,7 @@ export async function loadSettings(ctx: PluginContext): Promise<Settings> {
     lang,
     secretKey: (await getStr(ctx, K.secretKey)) || envStr("STRIPE_SECRET_KEY"),
     publishableKey: (await getStr(ctx, K.publishableKey)) || envStr("STRIPE_PUBLISHABLE_KEY"),
+    webhookSecret: (await getStr(ctx, K.webhookSecret)) || envStr("EMDASH_STRIPE_WEBHOOK_SECRET"),
     currency: (await getStr(ctx, K.currency, "usd")).toLowerCase(),
     priceUnit: (await getStr(ctx, K.priceUnit)) === "minor" ? "minor" : "major",
     mappings: parseMappings(await getStr(ctx, K.mappings)),

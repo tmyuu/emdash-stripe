@@ -19,32 +19,41 @@
  * collection + id/slug, and amounts come from the published entry (numeric
  * price field → inline `price_data`) or from Stripe itself (Price ID field).
  *
- * Webhook authenticity: EmDash parses route request bodies before handlers
- * run, so the raw bytes required for Stripe signature verification never
- * reach a plugin route. The delivery is therefore treated as an untrusted
- * hint: the handler validates the event ID shape, re-fetches the event from
- * the Stripe API, and processes only what Stripe returns. A forged POST can
- * at most cause a re-fetch of a real event, which is then deduplicated via a
- * KV marker. Verified events are recorded in the `payments` storage
- * collection, optionally mirrored as CMS order entries, and optionally
- * forwarded to a host URL as an HMAC-signed POST so host apps can fulfill
- * orders, send email, etc. Forwarding is at-least-once: a delivery is only
- * acknowledged to Stripe after the host endpoint accepts the forward, so a
- * failing host is covered by Stripe's own webhook retries.
+ * Webhook authenticity: the `webhook` route declares a raw text body and the
+ * `Stripe-Signature` header (EmDash 1.x route `request` options), so the
+ * handler sees the exact bytes Stripe signed. With a signing secret
+ * configured, each delivery is verified by signature (Web Crypto, Stripe's
+ * default timestamp tolerance) and rejected with HTTP 400 when the signature
+ * is missing or wrong. Without one, the delivery is treated as an untrusted
+ * hint as in 0.5: the handler validates the event ID shape, re-fetches the
+ * event from the Stripe API, and processes only what Stripe returns. Either
+ * way, events are deduplicated via a KV marker, recorded in the `payments`
+ * storage collection, optionally mirrored as CMS order entries, and
+ * optionally forwarded to a host URL as an HMAC-signed POST so host apps can
+ * fulfill orders, send email, etc. Forwarding is at-least-once: a delivery is
+ * only acknowledged to Stripe after the host endpoint accepts the forward, so
+ * a failing host is covered by Stripe's own webhook retries.
  *
  * The plugin must run in-process (`plugins:`, not `sandboxed:`): stripe-node
  * relies on the host Worker's global fetch/SubtleCrypto, which are not
  * verified inside an isolate.
  */
 
-import type {
-  PluginContext,
-  SandboxedPlugin,
-  SandboxedRouteContext,
+import {
+  pluginResponse,
+  type PluginContext,
+  type SandboxedPlugin,
+  type SandboxedRouteContext,
 } from "emdash/plugin";
 import { env as cfEnv } from "cloudflare:workers";
 import type Stripe from "stripe";
-import { getStripe, toMinorUnits, hmacSha256Hex, verifyTrustedToken } from "./stripe.js";
+import {
+  getStripe,
+  toMinorUnits,
+  hmacSha256Hex,
+  verifyTrustedToken,
+  constructWebhookEvent,
+} from "./stripe.js";
 import {
   loadSettings,
   getStr,
@@ -580,14 +589,25 @@ async function handleSubscription(routeCtx: SandboxedRouteContext, ctx: PluginCo
       const found = await stripe.prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 });
       priceId = found.data[0]?.id;
       if (!priceId) {
-        const price = await stripe.prices.create({
-          currency: i.currency,
-          unit_amount: i.unitAmount!,
-          recurring: { interval: i.interval!, interval_count: i.intervalCount ?? 1 },
-          product_data: { name: i.name },
-          lookup_key: lookupKey,
-        });
-        priceId = price.id;
+        try {
+          const price = await stripe.prices.create({
+            currency: i.currency,
+            unit_amount: i.unitAmount!,
+            recurring: { interval: i.interval!, interval_count: i.intervalCount ?? 1 },
+            product_data: { name: i.name },
+            lookup_key: lookupKey,
+            // An archived Price keeps its lookup_key, so take the key over
+            // instead of failing on every request.
+            transfer_lookup_key: true,
+          });
+          priceId = price.id;
+        } catch (err) {
+          // Lookup keys are unique per account: a concurrent request may have
+          // created this Price since the list above. Reuse it if so.
+          const again = await stripe.prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 });
+          priceId = again.data[0]?.id;
+          if (!priceId) throw err;
+        }
       }
     } catch (err) {
       ctx.log.error(`Failed to resolve a recurring price for ${lookupKey}`, err as Error);
@@ -797,6 +817,30 @@ async function forwardEvent(ctx: PluginContext, cfg: Settings, event: Stripe.Eve
   }
 }
 
+/**
+ * Amount per billing period across all subscription items, or null when an
+ * item has no fixed unit amount (e.g. tiered/metered) or currencies differ.
+ * (exported for tests)
+ */
+export function subscriptionAmount(sub: Stripe.Subscription): number | null {
+  const items = sub.items?.data ?? [];
+  if (items.length === 0) return null;
+  const currency = items[0]!.price?.currency;
+  let total = 0;
+  for (const item of items) {
+    const unit = item.price?.unit_amount;
+    if (unit == null || item.price?.currency !== currency) return null;
+    total += unit * (item.quantity ?? 1);
+  }
+  return total;
+}
+
+/**
+ * Event payloads arrive in one of two API versions: signature-verified
+ * deliveries are rendered in the webhook endpoint's API version, re-fetched
+ * ones (no signing secret) in the account's default version. Shapes that
+ * moved between versions are therefore read defensively below.
+ */
 async function processEvent(ctx: PluginContext, cfg: Settings, event: Stripe.Event): Promise<void> {
   const type = event.type;
 
@@ -894,11 +938,10 @@ async function processEvent(ctx: PluginContext, cfg: Settings, event: Stripe.Eve
     }
     const sub = event.data.object as Stripe.Subscription;
     const item = sub.items?.data?.[0];
-    const unit = item?.price?.unit_amount ?? null;
     await upsertPayment(ctx, sub.id, {
       objectType: "subscription",
       status: type === "customer.subscription.deleted" ? "canceled" : sub.status,
-      amount: unit != null ? unit * (item?.quantity ?? 1) : null,
+      amount: subscriptionAmount(sub),
       currency: sub.currency ?? item?.price?.currency ?? null,
       description: sub.metadata?.emdash_desc ?? item?.price?.nickname ?? null,
       mode: "subscription",
@@ -945,29 +988,79 @@ async function processEvent(ctx: PluginContext, cfg: Settings, event: Stripe.Eve
 }
 
 // --- webhook -------------------------------------------------------------------
-async function handleWebhook(routeCtx: SandboxedRouteContext, ctx: PluginContext) {
-  const input = (routeCtx.input ?? {}) as Record<string, unknown>;
-  const id = typeof input.id === "string" ? input.id : "";
-  if (!EVENT_ID_RE.test(id)) return { received: false, error: "invalid_event" };
+/**
+ * Raw JSON response for the webhook route (`response: "raw"`). The status is
+ * what Stripe acts on: only 2xx acknowledges a delivery. Thrown errors still
+ * surface as HTTP 500, which Stripe retries.
+ */
+function webhookReply(status: number, body: Record<string, unknown>) {
+  return pluginResponse({
+    status,
+    headers: { "content-type": "application/json" },
+    body: { kind: "text", value: JSON.stringify(body) },
+  });
+}
 
+/**
+ * Read a declared request header. Sandboxed-style route contexts carry a
+ * plain record with lowercase keys; a real `Headers` object is handled too.
+ */
+function headerValue(headers: unknown, name: string): string | undefined {
+  if (!headers || typeof headers !== "object") return undefined;
+  const v =
+    typeof (headers as Headers).get === "function"
+      ? (headers as Headers).get(name)
+      : (headers as Record<string, unknown>)[name];
+  return typeof v === "string" && v ? v : undefined;
+}
+
+/** (exported for tests) */
+export async function handleWebhook(routeCtx: SandboxedRouteContext, ctx: PluginContext) {
   const cfg = await loadSettings(ctx);
-  if (!cfg.secretKey) return { received: false, error: "not_configured" };
-
-  const dedupKey = `state:evt:${id}`;
-  if (await ctx.kv.get(dedupKey)) return { received: true, duplicate: true };
-
+  if (!cfg.secretKey) return webhookReply(200, { received: false, error: "not_configured" });
+  const raw = typeof routeCtx.input === "string" ? routeCtx.input : "";
   const stripe = getStripe(cfg.secretKey);
+
   let event: Stripe.Event;
-  try {
-    event = await stripe.events.retrieve(id);
-  } catch (err) {
-    // Unknown to Stripe (forged, wrong account, or live/test mismatch) or a
-    // transient API failure. Throw so the delivery is not acknowledged and
-    // Stripe retries genuine events later.
-    ctx.log.warn(`Webhook event ${id} could not be verified against the Stripe API`, {
-      message: (err as Error).message,
-    });
-    throw new Error("event_verification_failed");
+  let dedupKey: string;
+  if (cfg.webhookSecret) {
+    // Signature path: the payload itself is trusted once verified.
+    const signature = headerValue(routeCtx.request.headers, "stripe-signature");
+    if (!signature) return webhookReply(400, { received: false, error: "missing_signature" });
+    try {
+      event = await constructWebhookEvent(stripe, raw, signature, cfg.webhookSecret);
+    } catch (err) {
+      ctx.log.warn("Webhook signature verification failed", { message: (err as Error).message });
+      return webhookReply(400, { received: false, error: "invalid_signature" });
+    }
+    dedupKey = `state:evt:${event.id}`;
+    if (await ctx.kv.get(dedupKey)) return webhookReply(200, { received: true, duplicate: true });
+  } else {
+    // Fallback path (no signing secret): the body is only a hint naming an
+    // event, which is re-fetched from the Stripe API.
+    let id = "";
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      const v = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>).id : undefined;
+      if (typeof v === "string") id = v;
+    } catch {
+      // fall through to the shape check
+    }
+    if (!EVENT_ID_RE.test(id)) return webhookReply(200, { received: false, error: "invalid_event" });
+
+    dedupKey = `state:evt:${id}`;
+    if (await ctx.kv.get(dedupKey)) return webhookReply(200, { received: true, duplicate: true });
+    try {
+      event = await stripe.events.retrieve(id);
+    } catch (err) {
+      // Unknown to Stripe (forged, wrong account, or live/test mismatch) or a
+      // transient API failure. Throw so the delivery is not acknowledged and
+      // Stripe retries genuine events later.
+      ctx.log.warn(`Webhook event ${id} could not be verified against the Stripe API`, {
+        message: (err as Error).message,
+      });
+      throw new Error("event_verification_failed");
+    }
   }
 
   await processEvent(ctx, cfg, event);
@@ -976,7 +1069,7 @@ async function handleWebhook(routeCtx: SandboxedRouteContext, ctx: PluginContext
   // retry re-processes (idempotent upserts) and re-forwards the event.
   if (!(await forwardEvent(ctx, cfg, event))) throw new Error("event_forward_failed");
   await ctx.kv.set(dedupKey, { type: event.type, at: new Date().toISOString() });
-  return { received: true, type: event.type };
+  return webhookReply(200, { received: true, type: event.type });
 }
 
 /**
@@ -1009,7 +1102,15 @@ export default {
     subscription: { public: true, handler: localized(handleSubscription) },
     session: { public: true, handler: localized(handleSession) },
     config: { public: true, handler: handleConfig },
-    webhook: { public: true, handler: handleWebhook },
+    // Raw text body + the signature header so Stripe signatures can be
+    // verified; raw response so a bad signature can answer HTTP 400.
+    webhook: {
+      public: true,
+      methods: ["POST"],
+      request: { body: "text", headers: ["stripe-signature"] },
+      response: "raw",
+      handler: handleWebhook,
+    },
     admin: { handler: handleAdmin },
   },
 } satisfies SandboxedPlugin;

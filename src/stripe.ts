@@ -9,13 +9,14 @@
 import Stripe from "stripe";
 
 /**
- * Build a Stripe client. stripe-node v22 resolves a Workers-native build via
+ * Build a Stripe client. stripe-node v23 resolves a Workers-native build via
  * the `workerd` export condition (fetch + SubtleCrypto by default); passing
  * the fetch HTTP client explicitly keeps behavior identical on non-Workers
  * dev servers (e.g. a Node-based `astro dev`).
  *
  * `apiVersion` is intentionally omitted: requests use the SDK's pinned
- * version, which is what the bundled TypeScript types describe.
+ * version (2026-10-28.endive for v23), which is what the bundled TypeScript
+ * types describe.
  */
 export function getStripe(secretKey: string): Stripe {
   return new Stripe(secretKey, {
@@ -59,6 +60,28 @@ export function formatAmount(minor: number, currency: string): string {
   return `${(minor / divisor).toFixed(decimals)} ${currency.toUpperCase()}`;
 }
 
+// --- webhook signatures -----------------------------------------------------------
+/**
+ * Verify a Stripe webhook delivery against the endpoint's signing secret and
+ * return the event. Throws when the signature header is malformed, does not
+ * match the raw body, or is outside Stripe's default timestamp tolerance.
+ * Web Crypto keeps it identical on Workers and Node dev servers.
+ */
+export function constructWebhookEvent(
+  stripe: Stripe,
+  rawBody: string,
+  signatureHeader: string,
+  secret: string,
+): Promise<Stripe.Event> {
+  return stripe.webhooks.constructEventAsync(
+    rawBody,
+    signatureHeader,
+    secret,
+    undefined,
+    Stripe.createSubtleCryptoProvider(),
+  );
+}
+
 // --- forwarding signature ------------------------------------------------------
 /**
  * HMAC-SHA256 over `payload` with `secret`, hex-encoded. Used to sign
@@ -77,6 +100,17 @@ export async function hmacSha256Hex(secret: string, payload: string): Promise<st
   );
   const sig = await crypto.subtle.sign("HMAC", key, enc.encode(payload));
   return Array.from(new Uint8Array(sig), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Compare two strings in time independent of where they differ (length is
+ * not secret here: both sides are fixed-size hex digests).
+ */
+export function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 // --- host-signed request tokens --------------------------------------------------
@@ -101,7 +135,7 @@ export async function verifyTrustedToken(
   if (!m) return null;
   const [, t, payloadB64, sig] = m;
   if (Math.abs(Date.now() / 1000 - Number(t)) > TRUSTED_TOKEN_TOLERANCE_SEC) return null;
-  if ((await hmacSha256Hex(secret, `${t}.${payloadB64}`)) !== sig) return null;
+  if (!timingSafeEqual(await hmacSha256Hex(secret, `${t}.${payloadB64}`), sig!)) return null;
   try {
     const parsed: unknown = JSON.parse(atob(payloadB64!.replace(/-/g, "+").replace(/_/g, "/")));
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
