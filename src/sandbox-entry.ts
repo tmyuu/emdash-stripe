@@ -596,6 +596,9 @@ async function handleSubscription(routeCtx: SandboxedRouteContext, ctx: PluginCo
             recurring: { interval: i.interval!, interval_count: i.intervalCount ?? 1 },
             product_data: { name: i.name },
             lookup_key: lookupKey,
+            // An archived Price keeps its lookup_key, so take the key over
+            // instead of failing on every request.
+            transfer_lookup_key: true,
           });
           priceId = price.id;
         } catch (err) {

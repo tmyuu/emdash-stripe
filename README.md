@@ -13,7 +13,7 @@ As of mid-2026 there is no other working Stripe integration for EmDash (the offi
 
 ## Requirements
 
-- EmDash **1.x** (1.4+ recommended), registered in-process via `plugins:` (not `sandboxed:` — stripe-node needs the host Worker's `fetch`/`SubtleCrypto`).
+- EmDash **1.4+** (1.x), registered in-process via `plugins:` (not `sandboxed:` — stripe-node needs the host Worker's `fetch`/`SubtleCrypto`).
 - A Stripe account and secret key.
 
 ## Compatibility
@@ -21,7 +21,7 @@ As of mid-2026 there is no other working Stripe integration for EmDash (the offi
 | emdash-stripe | EmDash | stripe-node (Stripe API version) |
 | --- | --- | --- |
 | 0.1 – 0.5 | 0.27.x | 22 |
-| 0.6.0 | 1.x | 23 (`2026-10-28.endive`) |
+| 0.6.0 | 1.4+ (1.x) | 23 (`2026-10-28.endive`) |
 
 Sites still on EmDash 0.27 should pin `github:tmyuu/emdash-stripe#v0.5.0`.
 
@@ -47,7 +47,7 @@ export default defineConfig({
 
 ## Setup
 
-1. **Keys** — set `STRIPE_SECRET_KEY` (and optionally `STRIPE_PUBLISHABLE_KEY` / `STRIPE_WEBHOOK_SECRET`) as Worker secrets, or paste them on the admin **Stripe → Settings** page (the settings page value wins).
+1. **Keys** — set `STRIPE_SECRET_KEY` (and optionally `STRIPE_PUBLISHABLE_KEY` / `EMDASH_STRIPE_WEBHOOK_SECRET`) as Worker secrets, or paste them on the admin **Stripe → Settings** page (the settings page value wins).
 2. **Sellable collections** — on the settings page, map collections to fields (JSON):
 
    ```json
@@ -234,7 +234,7 @@ The `webhook` route (POST only) declares a raw text body and the `Stripe-Signatu
 
 1. In the Stripe Dashboard → Developers → Webhooks, open (or create) the endpoint for `https://your-site/_emdash/api/plugins/stripe/webhook`. **Start in test mode.**
 2. Set the endpoint's **API version to `2026-10-28.endive`** — the version stripe-node 23 and this plugin are typed against.
-3. Reveal the endpoint's **Signing secret** (`whsec_...`) and either paste it into **Stripe → Settings → Webhook signing secret** or set it as the `STRIPE_WEBHOOK_SECRET` Worker secret (the settings page value wins). Test and live endpoints have different secrets.
+3. Reveal the endpoint's **Signing secret** (`whsec_...`) and either paste it into **Stripe → Settings → Webhook signing secret** or set it as the `EMDASH_STRIPE_WEBHOOK_SECRET` Worker secret (the settings page value wins). Test and live endpoints have different secrets.
 4. Send a test event (Dashboard "Send test event", or `stripe trigger checkout.session.completed`) and check the endpoint's delivery log for `200`.
 
 With a signing secret, each delivery is verified with Stripe's signature scheme (Web Crypto, default 5-minute timestamp tolerance). A missing or invalid signature is answered with **HTTP 400** (`missing_signature` / `invalid_signature`) and nothing is processed. For local testing, `stripe listen --forward-to …` prints its own `whsec_...` — use that one while it runs.
@@ -331,13 +331,14 @@ Subscription lifecycle and invoice events are recorded, and session metadata is 
 
 ## Upgrading from 0.5
 
-0.6 requires EmDash 1.x and moves to stripe-node 23 (Stripe API `2026-10-28.endive`).
+0.6 requires EmDash 1.4+ and moves to stripe-node 23 (Stripe API `2026-10-28.endive`).
 
 1. Bump `emdash` and `@emdash-cms/cloudflare` to `^1.4` (plus this plugin), and follow EmDash's own 1.x upgrade notes for the site.
 2. Run `emdash migrate` against each database **before** deploying the new build.
-3. Configure the webhook signing secret (see [Webhook model](#signing-secret-recommended)) and set the endpoint API version to `2026-10-28.endive`. Until a secret is set, webhooks keep working through the re-fetch fallback.
-4. Host apps that call Stripe directly with stripe-node 23 must drop `payment_method_types`, which the new API version removed — e.g. `setupIntents.create({ payment_method_types: ["card"] })` → `setupIntents.create({ automatic_payment_methods: { enabled: true } })` or `allowed_payment_method_types: ["card"]`. The plugin itself never sets it.
-5. The webhook route now responds with a plain JSON body instead of EmDash's `{ success, data }` envelope; only Stripe consumes it, so no host change is needed.
+3. Configure the webhook signing secret (see [Webhook model](#signing-secret-recommended)) and set the endpoint API version to `2026-10-28.endive`. Until a secret is set, webhooks keep working through the re-fetch fallback. The env variable is `EMDASH_STRIPE_WEBHOOK_SECRET`, not `STRIPE_WEBHOOK_SECRET`, so a host's own Stripe endpoint secret is never picked up by mistake. A secret pasted on the settings page wins over the env value; tick **Clear the saved webhook signing secret** to remove it.
+4. Once a signing secret is set, events are processed and [forwarded](#2-signed-event-forwarding) as delivered, in the **endpoint's** API version. 0.5 forwarded the re-fetched event in the account's default API version. If your account default is older than `2026-10-28.endive`, check host handlers that read version-sensitive fields (e.g. `invoice.subscription`).
+5. Host apps that call Stripe directly with stripe-node 23 must drop `payment_method_types`, which the new API version removed — e.g. `setupIntents.create({ payment_method_types: ["card"] })` → `setupIntents.create({ automatic_payment_methods: { enabled: true } })` or `allowed_payment_method_types: ["card"]`. The plugin itself never sets it.
+6. The webhook route now responds with a plain JSON body instead of EmDash's `{ success, data }` envelope; only Stripe consumes it, so no host change is needed.
 
 ## Development
 

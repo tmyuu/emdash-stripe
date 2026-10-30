@@ -49,7 +49,7 @@
  * mappings, checkout options) is done at runtime from the plugin's admin
  * settings page; the keys and signing secret may also come from the host
  * Worker env (`STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`,
- * `STRIPE_WEBHOOK_SECRET`).
+ * `EMDASH_STRIPE_WEBHOOK_SECRET`).
  */
 
 import type { PluginDescriptor } from "emdash";

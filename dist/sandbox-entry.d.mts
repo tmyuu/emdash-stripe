@@ -159,6 +159,14 @@ declare function handleAdmin(routeCtx: SandboxedRouteContext, ctx: PluginContext
       type: string;
       action_id: string;
       label: string;
+      initial_value: boolean;
+      options?: undefined;
+      placeholder?: undefined;
+      multiline?: undefined;
+    } | {
+      type: string;
+      action_id: string;
+      label: string;
       initial_value: "major" | "minor";
       options: {
         value: string;
@@ -174,14 +182,6 @@ declare function handleAdmin(routeCtx: SandboxedRouteContext, ctx: PluginContext
       multiline: boolean;
       initial_value: string;
       options?: undefined;
-    } | {
-      type: string;
-      action_id: string;
-      label: string;
-      initial_value: boolean;
-      options?: undefined;
-      placeholder?: undefined;
-      multiline?: undefined;
     })[];
     text?: undefined;
   })[];

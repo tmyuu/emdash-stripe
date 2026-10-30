@@ -46,6 +46,7 @@ async function buildSettingsPage(ctx: PluginContext) {
           { type: "secret_input", action_id: "secretKey", label: t.secretKeyLabel, placeholder: t.secretKeyPlaceholder },
           { type: "text_input", action_id: "publishableKey", label: t.publishableKeyLabel, placeholder: t.publishableKeyPlaceholder, initial_value: (await getStr(ctx, K.publishableKey)) },
           { type: "secret_input", action_id: "webhookSecret", label: t.webhookSecretLabel, placeholder: t.webhookSecretPlaceholder },
+          { type: "toggle", action_id: "clearWebhookSecret", label: t.clearWebhookSecretLabel, initial_value: false },
           { type: "text_input", action_id: "currency", label: t.currencyLabel, placeholder: t.currencyPlaceholder, initial_value: cfg.currency },
           {
             type: "select",
@@ -133,6 +134,9 @@ async function saveSettings(ctx: PluginContext, values: Record<string, unknown>)
       const v = values[key];
       if (typeof v === "string" && v.trim()) await ctx.kv.set(kvKey, v.trim());
     }
+    // An empty signing secret is a mode of its own (env value or re-fetch
+    // fallback), so unlike the API key it can be cleared explicitly.
+    if (values.clearWebhookSecret === true) await ctx.kv.delete(K.webhookSecret);
 
     return { ...(await buildSettingsPage(ctx)), toast: { message: t.toastSaved, type: "success" } };
   } catch (err) {
