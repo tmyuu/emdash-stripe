@@ -6,9 +6,9 @@
 function stripePayments() {
 	return {
 		id: "stripe",
-		version: "0.6.0",
+		version: "0.7.0",
 		format: "standard",
-		entrypoint: "emdash-stripe/sandbox",
+		entrypoint: "@livspect/emdash-stripe/sandbox",
 		capabilities: [
 			"content:read",
 			"content:write",
