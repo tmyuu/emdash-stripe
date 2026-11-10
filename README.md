@@ -18,11 +18,15 @@ As of mid-2026 there is no other working Stripe integration for EmDash (the offi
 
 ## Compatibility
 
+From 1.0.0 the package follows semantic versioning: breaking changes only
+land in a new major version, so `^1.0.0` picks up every 1.x fix and feature.
+
 | Plugin | EmDash | stripe-node (Stripe API version) |
 | --- | --- | --- |
 | 0.1 – 0.5 | 0.27.x | 22 |
 | 0.6.0 | 1.4+ (1.x) | 23 (`2026-10-28.endive`) |
 | 0.7.0 | 1.4+ (1.x) | 23 (`2026-10-28.endive`) — first release on npm as `@livspect/emdash-stripe` |
+| 1.0.x | 1.4+ (1.x) | 23 (`2026-10-28.endive`) |
 
 Sites still on EmDash 0.27 should pin `github:tmyuu/emdash-stripe#v0.5.0`.
 
@@ -337,12 +341,17 @@ name `emdash-stripe`. From 0.7.0 it is published on npm as `@livspect/emdash-str
 the plugin locates its sandbox entry by that name, so update every reference:
 
 1. `package.json`: replace the `"emdash-stripe": "github:tmyuu/emdash-stripe#v…"`
-   dependency with `"@livspect/emdash-stripe": "^0.7.0"`. If the package is listed under
-   `pnpm.onlyBuiltDependencies`, remove it — the npm tarball ships a built `dist/`.
+   dependency with `"@livspect/emdash-stripe": "^1.0.0"`. Remove the old name from
+   `pnpm.onlyBuiltDependencies` and from `allowBuilds` / `onlyBuiltDependencies` in
+   `pnpm-workspace.yaml` — the npm tarball ships a built `dist/`. A stale entry makes
+   pnpm 10 write a placeholder line asking you to set it to true or false.
 2. `astro.config.mjs`: import from `@livspect/emdash-stripe`, and rename any Vite
-   `optimizeDeps.include` / `ssr.noExternal` entries to `@livspect/emdash-stripe` and
-   `@livspect/emdash-stripe/sandbox`.
-3. Reinstall and build. Settings and stored data carry over: they are keyed by
+   `optimizeDeps.include` / `optimizeDeps.exclude` / `ssr.noExternal` entries to
+   `@livspect/emdash-stripe` and `@livspect/emdash-stripe/sandbox`.
+3. If pnpm refuses a version published in the last day (`minimumReleaseAge`, set
+   in `pnpm-workspace.yaml` or by pnpm's own default), wait, or add the package to
+   `minimumReleaseAgeExclude`.
+4. Reinstall and build. Settings and stored data carry over: they are keyed by
    the plugin id (`stripe`), which has not changed.
 
 The wire contracts are unchanged: routes stay under `/_emdash/api/plugins/stripe/`, objects are still tagged `metadata.source: "emdash-stripe"`, and forwards still carry `x-emdash-stripe-signature`.
