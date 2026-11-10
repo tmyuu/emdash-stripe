@@ -25,7 +25,7 @@
  * Register it in `astro.config.mjs`:
  *
  *   import emdash from 'emdash/astro';
- *   import stripePayments from 'emdash-stripe';
+ *   import stripePayments from '@livspect/emdash-stripe';
  *
  *   export default defineConfig({
  *     integrations: [
@@ -61,9 +61,9 @@ import type { PluginDescriptor } from "emdash";
 export function stripePayments(): PluginDescriptor {
   return {
     id: "stripe",
-    version: "0.6.0",
+    version: "0.7.0",
     format: "standard",
-    entrypoint: "emdash-stripe/sandbox",
+    entrypoint: "@livspect/emdash-stripe/sandbox",
     // content:read — resolve sellable entries (names/prices) server-side.
     // content:write — optional: create order entries in a host-chosen
     //                 collection when payments succeed (off by default).

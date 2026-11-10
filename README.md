@@ -1,4 +1,4 @@
-# emdash-stripe
+# @livspect/emdash-stripe
 
 Stripe payments for [EmDash CMS](https://docs.emdashcms.com). Sell what your CMS already knows about: map any collection as sellable and this plugin turns its entries into Stripe Checkout Sessions, Payment Intents, and subscriptions — with verified webhooks, payment records in the admin, and clean extension points for your site to react to payments.
 
@@ -18,23 +18,24 @@ As of mid-2026 there is no other working Stripe integration for EmDash (the offi
 
 ## Compatibility
 
-| emdash-stripe | EmDash | stripe-node (Stripe API version) |
+| Plugin | EmDash | stripe-node (Stripe API version) |
 | --- | --- | --- |
 | 0.1 – 0.5 | 0.27.x | 22 |
 | 0.6.0 | 1.4+ (1.x) | 23 (`2026-10-28.endive`) |
+| 0.7.0 | 1.4+ (1.x) | 23 (`2026-10-28.endive`) — first release on npm as `@livspect/emdash-stripe` |
 
 Sites still on EmDash 0.27 should pin `github:tmyuu/emdash-stripe#v0.5.0`.
 
 ## Install
 
 ```sh
-pnpm add github:tmyuu/emdash-stripe   # or npm i emdash-stripe once published
+pnpm add @livspect/emdash-stripe   # or: npm i @livspect/emdash-stripe
 ```
 
 ```js
 // astro.config.mjs
 import emdash from "emdash/astro";
-import stripePayments from "emdash-stripe";
+import stripePayments from "@livspect/emdash-stripe";
 
 export default defineConfig({
   integrations: [
@@ -329,6 +330,23 @@ Subscription lifecycle and invoice events are recorded, and session metadata is 
 - Saved cards / Customer Portal / cart state are host-app concerns and intentionally out of scope for v1.
 - Test with `stripe trigger checkout.session.completed` (Stripe CLI) — both signature verification and the re-fetch fallback work with CLI-triggered test events.
 
+## Migrating from a GitHub install (0.6.x and earlier)
+
+Up to 0.6.x the plugin was installed straight from GitHub under the unscoped
+name `emdash-stripe`. From 0.7.0 it is published on npm as `@livspect/emdash-stripe`, and
+the plugin locates its sandbox entry by that name, so update every reference:
+
+1. `package.json`: replace the `"emdash-stripe": "github:tmyuu/emdash-stripe#v…"`
+   dependency with `"@livspect/emdash-stripe": "^0.7.0"`. If the package is listed under
+   `pnpm.onlyBuiltDependencies`, remove it — the npm tarball ships a built `dist/`.
+2. `astro.config.mjs`: import from `@livspect/emdash-stripe`, and rename any Vite
+   `optimizeDeps.include` / `ssr.noExternal` entries to `@livspect/emdash-stripe` and
+   `@livspect/emdash-stripe/sandbox`.
+3. Reinstall and build. Settings and stored data carry over: they are keyed by
+   the plugin id (`stripe`), which has not changed.
+
+The wire contracts are unchanged: routes stay under `/_emdash/api/plugins/stripe/`, objects are still tagged `metadata.source: "emdash-stripe"`, and forwards still carry `x-emdash-stripe-signature`.
+
 ## Upgrading from 0.5
 
 0.6 requires EmDash 1.4+ and moves to stripe-node 23 (Stripe API `2026-10-28.endive`).
@@ -343,10 +361,19 @@ Subscription lifecycle and invoice events are recorded, and session metadata is 
 ## Development
 
 ```sh
-pnpm build       # tsdown → dist/ (committed, so github: installs work)
+pnpm build       # tsdown → dist/ (still committed, so existing github: installs keep working)
 pnpm typecheck   # tsc --noEmit
 pnpm test        # vitest (no network: Stripe calls are stubbed)
 ```
+
+## Releasing
+
+1. Bump `version` in `package.json` and in the descriptor in `src/index.ts`.
+2. Rebuild and commit `dist/` (`npm run build`); it stays committed so GitHub
+   installs keep working.
+3. Merge to `main`, then push a `vX.Y.Z` tag. The `Publish to npm` workflow
+   checks the tag against `package.json`, rebuilds, verifies `dist/` and
+   publishes with npm trusted publishing.
 
 ## License
 
