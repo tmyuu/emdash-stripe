@@ -380,6 +380,9 @@ pnpm test        # vitest (no network: Stripe calls are stubbed)
 1. Bump `version` in `package.json` and in the descriptor in `src/index.ts`.
 2. Rebuild and commit `dist/` (`npm run build`); it stays committed so GitHub
    installs keep working.
+   If dependencies changed, regenerate `package-lock.json` with the npm version
+   pinned in the workflow, from a clean directory:
+   `npx npm@11.19.1 install --package-lock-only` (copy only `package.json` there).
 3. Merge to `main`, then push a `vX.Y.Z` tag. The `Publish to npm` workflow
    checks the tag against `package.json`, rebuilds, verifies `dist/` and
    publishes with npm trusted publishing.
