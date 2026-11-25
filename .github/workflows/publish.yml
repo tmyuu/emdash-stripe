@@ -21,6 +21,9 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      # Pin npm: package-lock.json is written with this version (see README,
+      # Releasing). A newer npm can reject it as out of sync.
+      - run: npm install -g npm@11.19.1
       - name: Check the tag matches package.json
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - run: npm ci
